@@ -1,0 +1,49 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net462</TargetFramework>
+    <AssemblyName>Weathering</AssemblyName>
+    <RootNamespace>Weathering</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <Version>0.1.0</Version>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <!-- Unity/BepInEx reference mismatched netstandard versions; harmless at runtime -->
+    <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3277</MSBuildWarningsAsMessages>
+    <!-- Lets Jotunn generate publicized Valheim assemblies on first build -->
+    <ExecutePrebuild>true</ExecutePrebuild>
+    <!-- Override if Valheim lives elsewhere: dotnet build -p:VALHEIM_INSTALL="D:\...\Valheim" -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="JotunnLib" Version="2.30.2" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Update="@(Reference)" Private="false" />
+  </ItemGroup>
+
+  <!-- Thunderstore/Hexium package: dotnet build -c Release -t:Package -->
+  <PropertyGroup>
+    <PackageDescription>Dug pits, churned dirt and abandoned fields outside your base slowly weather back into the land.</PackageDescription>
+    <PackageWebsite>https://discord.gg/TsJGEmKj6V</PackageWebsite>
+    <PackageDependencies>"ValheimModding-Jotunn-2.30.2"</PackageDependencies>
+    <PackageStagingDir>$(BaseIntermediateOutputPath)package\</PackageStagingDir>
+    <PackageOutputDir>$(MSBuildProjectDirectory)\dist\</PackageOutputDir>
+  </PropertyGroup>
+
+  <!-- The mod page is package\README.md; the root README.md is the GitHub page for developers. -->
+  <Target Name="Package" DependsOnTargets="Build">
+    <RemoveDir Directories="$(PackageStagingDir)" />
+    <MakeDir Directories="$(PackageStagingDir);$(PackageOutputDir)" />
+    <Copy SourceFiles="$(TargetPath);package\icon.png;package\README.md;CHANGELOG.md" DestinationFolder="$(PackageStagingDir)" />
+    <WriteLinesToFile File="$(PackageStagingDir)manifest.json" Overwrite="true" Lines="{;  &quot;name&quot;: &quot;$(AssemblyName)&quot;,;  &quot;description&quot;: &quot;$(PackageDescription)&quot;,;  &quot;version_number&quot;: &quot;$(Version)&quot;,;  &quot;website_url&quot;: &quot;$(PackageWebsite)&quot;,;  &quot;dependencies&quot;: [$(PackageDependencies)];}" />
+    <Delete Files="$(PackageOutputDir)$(AssemblyName)-$(Version).zip" />
+    <ZipDirectory SourceDirectory="$(PackageStagingDir)" DestinationFile="$(PackageOutputDir)$(AssemblyName)-$(Version).zip" />
+    <Message Importance="High" Text="Packaged $(PackageOutputDir)$(AssemblyName)-$(Version).zip" />
+  </Target>
+
+</Project>

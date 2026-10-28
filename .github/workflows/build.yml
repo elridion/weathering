@@ -1,0 +1,136 @@
+﻿# Builds the mod on every push and pull request, and publishes a GitHub release with the
+# Thunderstore-format zip when a version tag (v1.2.3) is pushed.
+#
+# CI has no Valheim install, so it takes the Unity/Valheim assemblies from the free dedicated server
+# (Steam app 896660, anonymous login) and the BepInEx/Harmony assemblies from the BepInExPack.
+# Only valheim_server_Data/Managed is kept, at <install>/Valheim_Data/Managed where Jotunn's
+# prebuild expects it, and cached per Steam build id: until Valheim patches, steamcmd never runs.
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Outside the checkout so the SDK's default item globs never walk the game files
+  CI_DIR: /home/runner/weathering-ci
+  VALHEIM_DIR: /home/runner/weathering-ci/valheim
+  BEPINEX_DIR: /home/runner/weathering-ci/bepinex
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release create on tags
+    steps:
+      - uses: actions/checkout@v7
+
+      # Runner images have shipped the .NET 8 SDK; install it only when an image no longer does.
+      - name: Check for .NET 8 SDK
+        id: dotnet
+        run: echo "found=$(dotnet --list-sdks 2>/dev/null | grep -c '^8\.' || true)" | tee -a "$GITHUB_OUTPUT"
+
+      - if: steps.dotnet.outputs.found == '0'
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.x
+
+      # The public branch's build id from api.steamcmd.net (third party); if it is unreachable the
+      # key falls back to the ISO week, which costs at most one server download a week.
+      - name: Look up Valheim server build
+        id: valheim
+        run: |
+          build=$(curl -fsS --max-time 15 https://api.steamcmd.net/v1/info/896660 | jq -r '.data."896660".depots.branches.public.buildid // empty' || true)
+          echo "key=valheim-managed-${build:-week-$(date +%G-%V)}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Restore Valheim assemblies
+        id: cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.VALHEIM_DIR }}/Valheim_Data/Managed
+          key: ${{ steps.valheim.outputs.key }}
+
+      - name: Download Valheim dedicated server
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lib32gcc-s1
+          mkdir -p "$CI_DIR/steamcmd" "$CI_DIR/server" "$VALHEIM_DIR/Valheim_Data"
+          curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz | tar -xz -C "$CI_DIR/steamcmd"
+          # steamcmd can exit non-zero after a successful self-update, and a fresh install often fails
+          # once with "Missing configuration"; retry, and let the test below be the real check
+          for attempt in 1 2 3; do
+            "$CI_DIR/steamcmd"/steamcmd.sh +force_install_dir "$CI_DIR/server" +login anonymous +app_update 896660 +quit || true
+            [ -d "$CI_DIR/server/valheim_server_Data/Managed" ] && break
+          done
+          test -d "$CI_DIR/server/valheim_server_Data/Managed"
+          mv "$CI_DIR/server/valheim_server_Data/Managed" "$VALHEIM_DIR/Valheim_Data/Managed"
+
+      - name: Download BepInExPack_Valheim
+        run: |
+          url=$(curl -fsSL https://thunderstore.io/api/experimental/package/denikson/BepInExPack_Valheim/ | jq -r '.latest.download_url')
+          curl -fsSL "$url" -o "$CI_DIR/bepinex.zip"
+          unzip -q "$CI_DIR/bepinex.zip" -d "$CI_DIR/bepinexpack"
+          mv "$CI_DIR/bepinexpack"/BepInExPack_Valheim/BepInEx "$BEPINEX_DIR"
+          test -f "$BEPINEX_DIR/core/BepInEx.dll"
+
+      - name: Check version tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          csproj=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' Weathering.csproj)
+          plugin=$(sed -n 's:.*PluginVersion = "\(.*\)";.*:\1:p' src/WeatheringPlugin.cs)
+          echo "tag=$tag csproj=$csproj plugin=$plugin"
+          [ "$tag" = "$csproj" ] && [ "$tag" = "$plugin" ] || { echo "::error::Tag, Weathering.csproj and WeatheringPlugin.PluginVersion must match"; exit 1; }
+          grep -q "^## $tag\$" CHANGELOG.md || { echo "::error::CHANGELOG.md has no '## $tag' section"; exit 1; }
+
+      - name: Build and package
+        run: >
+          dotnet build -c Release -t:Package
+          -p:VALHEIM_INSTALL="$VALHEIM_DIR"
+          -p:BEPINEX_PATH="$BEPINEX_DIR"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: weathering-package
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v h="## $version" '$0 == h {on=1; next} on && /^## / {exit} on' CHANGELOG.md > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/*.zip --title "Weathering $version" --notes-file notes.md
+
+  # Publishing is public and cannot be taken back from here. Add required reviewers to the
+  # "hexium" environment in the repo settings to approve each publish by hand.
+  hexium:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment: hexium
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: weathering-package
+          path: dist
+
+      # Shared action (github.com/elridion/publish-hexium); categories and install location come
+      # from hexium.json.
+      - name: Publish to Hexium
+        uses: elridion/publish-hexium@v1
+        with:
+          token: ${{ secrets.HEXIUM_TOKEN }}
+          package: dist/*.zip

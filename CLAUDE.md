@@ -15,7 +15,9 @@ Stack, build, verification and git workflow are shared by all mods: see `../CLAU
 - `src/Healer.cs` is the pure paint-fade and erosion math.
 - `src/TerrainData.cs` decodes and encodes a zone's saved `TCData` without a `TerrainComp`.
 - `src/HealRunner.cs` heals flagged zones on the server while nobody is near (`IsZoneIdle` is the
-  shared "safe to write this zone" test); `src/HealCommands.cs` has `weathering_age`,
+  shared "safe to write this zone" test), and near sleeping players while the night is skipped;
+  `src/HealApply.cs` applies such an overnight result on the peer that owns the zone.
+  `src/HealCommands.cs` has `weathering_age`,
   `weathering_status` and `weathering_clear_sites`.
 - `src/TreePatches.cs` records a regrowth site when a tree is felled; `src/RegrowthSites.cs`
   registers the invisible marker prefab, maps trees to their saplings and writes the site keys.
@@ -32,7 +34,7 @@ Stack, build, verification and git workflow are shared by all mods: see `../CLAU
   `weathering_last` (long, world time in whole seconds of the last heal pass), the regrowth marker
   prefab `weathering_regrowth_site` with ZDO keys `weathering_tree` (int, felled tree prefab hash),
   `weathering_stump` (int, stump prefab hash, 0 if none) and `weathering_felled` (int, StampStore
-  minutes, at least 1), and config
+  minutes, at least 1), the routed RPC `Weathering_ApplyHeal` (one `ZPackage`), and config
   section/key names (renaming a key resets users' settings). It also reads Warden's
   `spawnward_radius` (float) and prefab `piece_spawnward`; those belong to Warden.
 - **Removing the mod must leave a valid world.** Only ever write vanilla-valid `TerrainComp` data.

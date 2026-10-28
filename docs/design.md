@@ -135,6 +135,26 @@ nobody is near, without instantiating anything.
   warning and loses its flag.
 - Time is world time, so sleeping counts as passing days. One in-game day =
   `EnvMan.instance.m_dayLengthSec` (`long`, default 1,200 s; verified).
+- **Overnight healing** (decided with the user). While everyone sleeps the server fast-forwards
+  time to the next morning over about 12 s (`EnvMan.SkipToMorning` sets the private `m_skipTime` and
+  `m_skipToTime`; `UpdateTimeSkip` advances the net time; public `IsTimeSkipping()`). During that
+  skip (sleep mode, server only) zones near players heal too: a zone need not be idle, and "now"
+  for the pass is the skip target, so the night counts. Pending flag, per-spot delay, protected
+  circles, Deep North, frozen mask and erosion are unchanged; a zone still heals at most once per
+  in-game day. There is no wait between passes and a whole pass (prepare, all erosion, write) runs
+  in one frame, since screens are dark; the data revision check at the write still applies.
+  Who writes a zone that is not idle: if its terrain compiler ZDO is owned by the server itself
+  (single player, the host's own zones) or by nobody or a peer that is gone, the server claims and
+  writes it as usual, and a loaded `TerrainComp` reloads it by itself (`CheckLoad` on a data
+  revision change). If a connected peer owns it, the server writes nothing and sends that peer the
+  routed RPC `Weathering_ApplyHeal` with the new `TCData`, stamps, last-pass time and flag, and the
+  data revision the pass read; the peer applies it only if it still owns the ZDO and its revision
+  still matches, else ignores it and the zone stays pending. Border vertices are mirrored only into
+  neighbours with the same writer (both written by the server, or both owned by the same peer,
+  sent in the same message and applied all or nothing); other borders stay frozen for that pass.
+  A pass started before the skip, or still running when it ends, needs the zone idle as usual.
+  Regrowth sites near players regrow during sleep mode as well (the sapling ZDO is created and
+  the marker destroyed on the server, as vanilla's server does near players).
 - Test commands on the server or host: `weathering_age <days>` (ages edits within 3 zones) and
   `weathering_status`. `weathering_clear_sites` destroys every regrowth marker; run before removing
   the mod, since clients of a dedicated server log "Missing prefab hash" each frame for markers
@@ -236,7 +256,8 @@ zones, are always frozen.
 
 Revised during implementation: healing runs only on the server, on zones no peer is near, and is
 saved to the ZDO with a new data revision, so a player who comes back receives the healed terrain
-like any terrain edit. Clients only record edit stamps on the zones they own. Workspace rule:
+like any terrain edit. Overnight, zones near players heal too, written by the server only where
+it owns them and otherwise applied by the owning peer (see When healing runs). Clients only record edit stamps on the zones they own. Workspace rule:
 `NetworkCompatibility(EveryoneMustHaveMod, VersionStrictness.Minor)`. Gameplay config is
 admin-only and synced.
 

@@ -9,7 +9,8 @@ namespace Weathering
     /// <c>DelayDays</c> old and nobody is near. The sapling is created as a bare ZDO the way
     /// <c>ZNetView.Awake</c> would, without an instance, so it appears when a player comes back and
     /// grows from then on. Uses the heal runner's idle test: a site is only touched while nobody can
-    /// have its zone loaded.
+    /// have its zone loaded, except in sleep mode, when sites near players regrow too. Creating a ZDO
+    /// and destroying a claimed one is safe near players: vanilla's server does the same.
     /// </summary>
     internal class RegrowthRunner : MonoBehaviour
     {
@@ -52,7 +53,7 @@ namespace Weathering
 
             if (zdoMan != s_zdoMan) Reset(zdoMan);
             Sweep(zdoMan);
-            ProcessNext(net);
+            ProcessNext();
         }
 
         /// <summary>Regrowth sites within <paramref name="radius"/> zones (Chebyshev) of a zone.</summary>
@@ -133,11 +134,13 @@ namespace Weathering
             s_seen.Clear();
         }
 
-        private static void ProcessNext(ZNet net)
+        private static void ProcessNext()
         {
             if (s_cursor >= s_queue.Count) return;
-            int now = StampStore.Now();
-            long nowSeconds = (long)net.GetTimeSeconds();
+            // While everyone sleeps, sites near players regrow too, as of the morning the skip ends at.
+            bool sleeping = HealRunner.IsSleepMode();
+            long nowSeconds = HealRunner.PassTime();
+            int now = (int)(nowSeconds / 60);
             float delay = DelayMinutes();
             int acted = 0;
 
@@ -147,7 +150,7 @@ namespace Weathering
                 if (!IsSite(zdo) || !IsDue(zdo, now, delay)) continue;
                 if (s_blockedUntil.TryGetValue(zdo.m_uid, out long until) && nowSeconds < until) continue;
                 Vector2s zone = ZoneSystem.GetZone(zdo.GetPosition());
-                if (!HealRunner.IsZoneIdle(zone, zdo)) continue;
+                if (!sleeping && !HealRunner.IsZoneIdle(zone, zdo)) continue;
 
                 acted++;
                 Process(zdo, zone, nowSeconds);

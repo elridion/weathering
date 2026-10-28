@@ -26,6 +26,12 @@ Adds to the workspace-wide `code-style.md` and `valheim-modding.md` in `../.clau
 - A heal pass spans several frames (`HealRunner` prepare, erode slices, finish), one pass at a
   time. Write no ZDO before the finish frame, and there re-check `IsZoneIdle` and that every ZDO
   read still has the `DataRevision` it had when decoded; otherwise drop the pass unwritten.
+- Sleep mode (`HealRunner.IsSleepMode`, server while `EnvMan.IsTimeSkipping()`) drops the idle
+  test and runs a whole pass in one frame. Then the owner applies: the server writes a zone only
+  when `WriterOf` says the server (idle, or owned by the server, nobody or a gone peer); a zone a
+  connected peer owns is never written by the server but sent through `HealApply`
+  (`Weathering_ApplyHeal`) with the revision the pass read, and the peer writes only if it still
+  owns it at that revision. Borders are mirrored only into neighbours with the same writer.
 - Clients hold only the ZDOs near them, so anything that needs every base or Warden stone around a
   zone (up to 180 m) must run on the server.
 - Private vanilla members: patch by string name, call through a cached `AccessTools.MethodDelegate`,

@@ -113,7 +113,7 @@ namespace Weathering
         {
             public override string Name => "weathering_status";
 
-            public override string Help => "- how many zones wait to heal and trees wait to regrow, and the state of the zone you stand in (server or host)";
+            public override string Help => "- how many zones wait to heal and trees wait to regrow, whether sleep mode is on, and the state of the zone you stand in (server or host)";
 
             public override void Run(string[] args)
             {
@@ -125,6 +125,9 @@ namespace Weathering
                         $"{due} of them old enough (as of the last sweeps).");
                     string pass = HealRunner.DescribePass();
                     if (pass != null) Print(pass);
+                    Print(HealRunner.IsSleepMode()
+                        ? "Sleep mode: active. Everyone sleeps, so zones and trees near players heal and regrow as of the coming morning."
+                        : "Sleep mode: inactive. Only zones and trees nobody is near heal and regrow.");
                 }
                 else
                 {

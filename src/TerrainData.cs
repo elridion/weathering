@@ -88,7 +88,10 @@ namespace Weathering
         }
 
         /// <summary>Writes the data back the way vanilla TerrainComp.Save does.</summary>
-        public void Write(ZDO zdo)
+        public void Write(ZDO zdo) => zdo.Set(ZDOVars.s_TCData, Encode());
+
+        /// <summary>The compressed TCData bytes vanilla TerrainComp.Save would write.</summary>
+        public byte[] Encode()
         {
             var pkg = new ZPackage();
             pkg.Write(SaveVersion);
@@ -113,7 +116,7 @@ namespace Weathering
                 pkg.Write(Paint[j].b);
                 pkg.Write(Paint[j].a);
             }
-            zdo.Set(ZDOVars.s_TCData, Utils.Compress(pkg.GetArray()));
+            return Utils.Compress(pkg.GetArray());
         }
 
         // Old saves stored paint on a width x width grid. This is vanilla Load's remap, line for line,

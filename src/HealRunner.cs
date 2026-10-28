@@ -11,6 +11,9 @@ namespace Weathering
     /// Warden stone around a zone, and a loaded TerrainComp re-saves its whole array over anything
     /// written underneath it, so a zone is only written while nobody can have it loaded. Players see
     /// the result when they come back and the zone loads.
+    /// While everyone sleeps (sleep mode) zones near players heal too, as of the morning the skip
+    /// ends at. The server then writes only zones it owns itself; a zone a connected peer owns is
+    /// sent to that peer, which applies it if nothing changed since (see HealApply).
     /// </summary>
     internal class HealRunner : MonoBehaviour
     {
@@ -37,6 +40,9 @@ namespace Weathering
         // The server's own synced simulation distance; peers' are public on ZNetPeer.
         private static readonly AccessTools.FieldRef<ZNet, SimulationDistance> s_simulationDistance =
             AccessTools.FieldRefAccess<ZNet, SimulationDistance>("m_simulationDistance");
+        // The world time a sleep skip ends at (the next morning); private on EnvMan.
+        private static readonly AccessTools.FieldRef<EnvMan, double> s_skipToTime =
+            AccessTools.FieldRefAccess<EnvMan, double>("m_skipToTime");
 
         // Edge neighbours by side: 0 is +x, 1 is -x, 2 is +z, 3 is -z (grid y runs along world z).
         private static readonly int[] s_sideDx = { 1, -1, 0, 0 };
@@ -97,6 +103,12 @@ namespace Weathering
         private static int s_passIterationsLeft;
         private static bool s_passEroded;
         private static bool s_passErosionPending;
+        // Session ID of whoever writes the pass's results: the server's own, or the connected peer
+        // that owns the zone (sleep mode only). Neighbours are linked only if the same one writes them.
+        private static long s_passWriter;
+
+        // Results bound for a peer, sent as one message when the pass writes.
+        private static readonly List<HealApply.Entry> s_outgoing = new List<HealApply.Entry>();
 
         private class Neighbour
         {
@@ -111,6 +123,8 @@ namespace Weathering
 
         private void Update()
         {
+            // Every peer must be able to apply an overnight heal of a zone it owns.
+            HealApply.EnsureRegistered();
             ZNet net = ZNet.instance;
             if (!net || !net.IsServer() || !BaseIndex.IsReady) return;
             ZDOMan zdoMan = ZDOMan.instance;
@@ -118,14 +132,15 @@ namespace Weathering
 
             if (zdoMan != s_zdoMan) Reset(zdoMan);
             Sweep(zdoMan);
-            HealNext(net);
+            HealNext();
         }
 
         /// <summary>
         /// True when no peer and not the server's own player is close enough to have the zone loaded,
         /// even as a ghost zone: its Chebyshev zone distance from every reference position is above
         /// Near + Far + 1 of the largest simulation distance in use. Server only. Anything that writes
-        /// saved data of unloaded zones (healing, later tree regrowth) must check this first.
+        /// saved data of unloaded zones (healing, tree regrowth) must check this first, except in sleep
+        /// mode, where the heal runner writes only zones the server owns (WriterOf).
         /// </summary>
         internal static bool IsZoneIdle(Vector2s zone) => NearestViewerDistance(zone) > IdleDistance();
 
@@ -241,6 +256,80 @@ namespace Weathering
         /// <summary>Takes the ZDO for the server before writing, the way vanilla's server code does.</summary>
         internal static void Claim(ZDO zdo) => zdo.SetOwner(ZDOMan.GetSessionID());
 
+        /// <summary>
+        /// Sleep mode: on the server while everyone sleeps and the game fast-forwards to morning. Zones
+        /// and regrowth sites then need not be idle, and "now" is the morning the skip ends at.
+        /// </summary>
+        internal static bool IsSleepMode()
+        {
+            ZNet net = ZNet.instance;
+            EnvMan env = EnvMan.instance;
+            return net && env && net.IsServer() && env.IsTimeSkipping();
+        }
+
+        /// <summary>
+        /// World time in whole seconds a heal pass or regrowth check counts as now: the skip target in
+        /// sleep mode, so the night counts, else the current time.
+        /// </summary>
+        internal static long PassTime()
+        {
+            long now = (long)ZNet.instance.GetTimeSeconds();
+            if (!IsSleepMode()) return now;
+            return Math.Max(now, (long)s_skipToTime(EnvMan.instance));
+        }
+
+        // Who may write a zone: the server itself (its session ID) when the zone is idle, or when the
+        // server, nobody or a peer that is gone owns it; else the connected peer that owns it. Outside
+        // sleep mode only idle zones are healed, so it is always the server there.
+        private static long WriterOf(Vector2s zone, ZDO zdo)
+        {
+            long server = ZDOMan.GetSessionID();
+            if (IsZoneIdle(zone, zdo)) return server;
+            long owner = zdo.GetOwner();
+            if (owner == 0L || owner == server) return server;
+            ZNet net = ZNet.instance;
+            return net && net.GetPeer(owner) != null ? owner : server;
+        }
+
+        // Writes a zone's result if the server is the writer, else queues it for the owning peer, who
+        // applies it only while the zone still has the data revision the pass read. Null data or
+        // stamps, and a last of 0, leave those as they are.
+        private static void Commit(long writer, ZDO zdo, uint revision, TerrainData data, int[] stamps, long last, bool pending)
+        {
+            if (writer == ZDOMan.GetSessionID())
+            {
+                Claim(zdo);
+                if (data != null) data.Write(zdo);
+                if (stamps != null) StampStore.Save(zdo, stamps);
+                if (last != 0L) StampStore.SetLast(zdo, last);
+                StampStore.SetPending(zdo, pending);
+                return;
+            }
+            s_outgoing.Add(new HealApply.Entry
+            {
+                Id = zdo.m_uid,
+                Revision = revision,
+                TerrainData = data?.Encode(),
+                Stamps = stamps != null ? StampStore.Encode(stamps) : null,
+                Last = last,
+                Pending = pending,
+            });
+        }
+
+        // Sends what Commit queued for a peer, as one message so the owner applies all or none of it.
+        private static void Flush(long writer)
+        {
+            if (s_outgoing.Count == 0) return;
+            try
+            {
+                HealApply.Send(writer, s_outgoing);
+            }
+            finally
+            {
+                s_outgoing.Clear();
+            }
+        }
+
         private static void Reset(ZDOMan zdoMan)
         {
             s_zdoMan = zdoMan;
@@ -291,15 +380,18 @@ namespace Weathering
             return $"Healing zone {s_passZone.x},{s_passZone.y} now: {phase}.";
         }
 
-        private static void HealNext(ZNet net)
+        private static void HealNext()
         {
             if (s_passActive)
             {
                 ContinuePass();
                 return;
             }
-            if (s_cursor >= s_queue.Count || Time.realtimeSinceStartup < s_nextHealTime) return;
-            long now = (long)net.GetTimeSeconds();
+            if (s_cursor >= s_queue.Count) return;
+            // Screens are dark while everyone sleeps: no wait between passes.
+            bool sleeping = IsSleepMode();
+            if (!sleeping && Time.realtimeSinceStartup < s_nextHealTime) return;
+            long now = PassTime();
             long day = DayLength();
 
             for (int n = 0; n < InspectPerFrame && s_cursor < s_queue.Count; n++)
@@ -310,23 +402,27 @@ namespace Weathering
                 // A world time behind the last pass (a restored save) counts as due.
                 if (last != 0L && now >= last && now - last < day) continue;
                 Vector2s zone = ZoneSystem.GetZone(zdo.GetPosition());
-                if (!IsZoneIdle(zone, zdo)) continue;
+                if (!sleeping && !IsZoneIdle(zone, zdo)) continue;
+                long writer = WriterOf(zone, zdo);
 
                 try
                 {
-                    Prepare(zdo, zone, now, day);
+                    Prepare(zdo, zone, now, day, writer, sleeping);
                 }
                 catch (Exception e)
                 {
-                    Fail(zdo, zone, e);
+                    Fail(zdo, zone, writer, e);
                 }
                 // A zone that was only stamped or could not be read is done in this frame.
                 if (!s_passActive) EndPass();
+                // In sleep mode the whole pass runs in this frame.
+                else if (sleeping) ContinuePass();
                 return;
             }
         }
 
-        // One frame of the pass in flight: a slice of erosion, or the final checks and writes.
+        // One frame of the pass in flight: a slice of erosion, or the final checks and writes. In
+        // sleep mode all of the erosion and the writes, in one frame.
         private static void ContinuePass()
         {
             ZDO zdo = s_passZdo;
@@ -335,32 +431,35 @@ namespace Weathering
             {
                 // Someone came near (or the server loaded it): what is in memory would be saved over
                 // or would overwrite their edits. Drop it; the zone stays pending and is retried.
-                if (!IsCompiler(zdo) || !IsZoneIdle(zone, zdo))
+                // In sleep mode Finish checks who may write instead.
+                bool sleeping = IsSleepMode();
+                if (!IsCompiler(zdo) || (!sleeping && !IsZoneIdle(zone, zdo)))
                 {
                     EndPass();
                     return;
                 }
                 if (!s_passEroded)
                 {
-                    ErodeSlice();
-                    return;
+                    ErodeSlice(sleeping ? s_passIterationsLeft : ErosionIterationsPerFrame);
+                    if (!s_passEroded || !sleeping) return;
                 }
                 Finish();
             }
             catch (Exception e)
             {
-                Fail(zdo, zone, e);
+                Fail(zdo, zone, s_passWriter, e);
             }
             EndPass();
         }
 
-        private static void Fail(ZDO zdo, Vector2s zone, Exception e)
+        private static void Fail(ZDO zdo, Vector2s zone, long writer, Exception e)
         {
             Jotunn.Logger.LogWarning($"Could not heal zone {zone.x},{zone.y}, it will not be retried until it is edited again: {e.Message}");
             try
             {
-                Claim(zdo);
-                StampStore.SetPending(zdo, false);
+                s_outgoing.Clear();
+                Commit(writer, zdo, zdo.DataRevision, null, null, 0L, false);
+                Flush(writer);
             }
             catch (Exception)
             {
@@ -383,14 +482,17 @@ namespace Weathering
             s_passStamps = null;
             s_passEroded = false;
             s_passIterationsLeft = 0;
+            s_passWriter = 0L;
+            s_outgoing.Clear();
             for (int s = 0; s < s_neighbours.Length; s++)
                 ClearNeighbour(s_neighbours[s]);
         }
 
         // Decodes the zone and its linked neighbours, builds the masks, fades the paint and loads the
         // offsets, then leaves the pass in flight for ErodeSlice. Writes only for a zone seen for the
-        // first time or one whose data cannot be read; those end here.
-        private static void Prepare(ZDO zdo, Vector2s zone, long now, long day)
+        // first time or one whose data cannot be read; those end here. <paramref name="writer"/> is
+        // who writes the results (WriterOf).
+        private static void Prepare(ZDO zdo, Vector2s zone, long now, long day, long writer, bool sleeping)
         {
             int width = s_width;
             int pitch = s_pitch;
@@ -401,8 +503,8 @@ namespace Weathering
             {
                 if (zdo.GetByteArray(ZDOVars.s_TCData) != null)
                     Jotunn.Logger.LogWarning($"Could not read the terrain data of zone {zone.x},{zone.y}; it will not heal until it is edited again.");
-                Claim(zdo);
-                StampStore.SetPending(zdo, false);
+                Commit(writer, zdo, revision, null, null, 0L, false);
+                Flush(writer);
                 return;
             }
 
@@ -414,9 +516,9 @@ namespace Weathering
             if (last == 0L)
             {
                 // First sight: edits without a stamp start their delay now; the first heal is a day later.
-                Claim(zdo);
-                StampStore.Save(zdo, stamps);
-                StampStore.SetLast(zdo, Math.Max(now, 1L));
+                // The zone was pending to get here, and stays so.
+                Commit(writer, zdo, revision, null, stamps, Math.Max(now, 1L), true);
+                Flush(writer);
                 return;
             }
 
@@ -435,7 +537,7 @@ namespace Weathering
             float erosionDays = 0f;
 
             BaseIndex.Collect(zone, s_circles);
-            LoadNeighbours(zone, pitch, nowMinutes);
+            LoadNeighbours(zone, pitch, nowMinutes, writer, sleeping);
 
             WorldGenerator worldGen = WorldGenerator.instance;
             Vector3 centre = ZoneSystem.GetZonePos(zone);
@@ -536,14 +638,15 @@ namespace Weathering
             s_passIterationsLeft = iterations;
             s_passEroded = false;
             s_passErosionPending = false;
+            s_passWriter = writer;
         }
 
-        // Runs up to ErosionIterationsPerFrame iterations. Erosion is done when the pass's iterations
-        // are used up or nothing can move any more (further iterations would change nothing); the
-        // last slice's answer is the pass's. A pass with no iterations still runs one empty slice for it.
-        private static void ErodeSlice()
+        // Runs up to maxIterations iterations. Erosion is done when the pass's iterations are used up
+        // or nothing can move any more (further iterations would change nothing); the last slice's
+        // answer is the pass's. A pass with no iterations still runs one empty slice for it.
+        private static void ErodeSlice(int maxIterations)
         {
-            int slice = Math.Min(s_passIterationsLeft, ErosionIterationsPerFrame);
+            int slice = Math.Min(s_passIterationsLeft, maxIterations);
             bool moving = Healer.Erode(s_offset, s_frozen, s_pitch, slice, Healer.DiffusionRate);
             s_passIterationsLeft -= slice;
             s_passErosionPending = moving && s_passCanErode;
@@ -553,18 +656,24 @@ namespace Weathering
         // Writes the pass back, but only if nothing touched the zone or its linked neighbours since
         // Prepare read them: a changed data revision means the decoded copy is stale, and writing it
         // would undo that change. Then the pass is dropped unwritten and the zone, still pending with
-        // its old last-pass time, is retried later.
+        // its old last-pass time, is retried later. The same goes when whoever may write the zone or a
+        // linked neighbour is no longer the pass's writer (sleep mode: its owner changed).
         private static void Finish()
         {
             ZDO zdo = s_passZdo;
             if (zdo.DataRevision != s_passRevision) return;
+            // Outside sleep mode ContinuePass has checked that the zone is idle, so this is the server.
+            if (WriterOf(s_passZone, zdo) != s_passWriter) return;
+            bool sleeping = IsSleepMode();
             for (int s = 0; s < s_neighbours.Length; s++)
             {
                 Neighbour neighbour = s_neighbours[s];
                 if (!neighbour.Linked) continue;
                 if (!IsCompiler(neighbour.Zdo) || neighbour.Zdo.DataRevision != neighbour.Revision) return;
                 // MirrorBorders may write it, so it must still be safe to write too.
-                if (!IsZoneIdle(ZoneSystem.GetZone(neighbour.Zdo.GetPosition()), neighbour.Zdo)) return;
+                Vector2s other = ZoneSystem.GetZone(neighbour.Zdo.GetPosition());
+                if (!sleeping && !IsZoneIdle(other, neighbour.Zdo)) return;
+                if (WriterOf(other, neighbour.Zdo) != s_passWriter) return;
             }
 
             TerrainData data = s_passData;
@@ -575,13 +684,12 @@ namespace Weathering
             ClearStaleStamps(data, stamps);
 
             // This zone first: if a neighbour write fails, the zone itself is already consistent.
-            Claim(zdo);
-            data.Write(zdo);
-            StampStore.Save(zdo, stamps);
-            StampStore.SetLast(zdo, s_passNow);
-            StampStore.SetPending(zdo, s_passPaintPending || s_passErosionPending || s_passWaiting);
+            Commit(s_passWriter, zdo, s_passRevision, data, stamps, s_passNow,
+                s_passPaintPending || s_passErosionPending || s_passWaiting);
 
             MirrorBorders(data, stamps);
+            // A peer gets the zone and its mirrored neighbours in one message, applied all or nothing.
+            Flush(s_passWriter);
         }
 
         // Height results go back as level = clamped offset, smooth = 0, like vanilla's Level and Raise.
@@ -693,14 +801,14 @@ namespace Weathering
                 }
 
                 if (!changed) continue;
-                Claim(neighbour.Zdo);
-                other.Write(neighbour.Zdo);
-                StampStore.Save(neighbour.Zdo, neighbour.Stamps);
-                StampStore.SetPending(neighbour.Zdo, true);
+                Commit(s_passWriter, neighbour.Zdo, neighbour.Revision, other, neighbour.Stamps, 0L, true);
             }
         }
 
-        private static void LoadNeighbours(Vector2s zone, int pitch, int nowMinutes)
+        // Links each edge neighbour with saved data that the pass may write along with this zone:
+        // an idle one outside sleep mode, one with the same writer in sleep mode. Other borders stay
+        // frozen for this pass.
+        private static void LoadNeighbours(Vector2s zone, int pitch, int nowMinutes, long writer, bool sleeping)
         {
             for (int side = 0; side < s_neighbours.Length; side++)
             {
@@ -710,7 +818,8 @@ namespace Weathering
 
                 var other = new Vector2s(zone.x + s_sideDx[side], zone.y + s_sideDy[side]);
                 if (!s_byZone.TryGetValue(other, out ZDO zdo) || !IsCompiler(zdo)) continue;
-                if (!ZoneSystem.GetZone(zdo.GetPosition()).Equals(other) || !IsZoneIdle(other, zdo)) continue;
+                if (!ZoneSystem.GetZone(zdo.GetPosition()).Equals(other)) continue;
+                if (sleeping ? WriterOf(other, zdo) != writer : !IsZoneIdle(other, zdo)) continue;
                 uint revision = zdo.DataRevision;
                 if (!TerrainData.TryRead(zdo, pitch, out TerrainData data)) continue;
 

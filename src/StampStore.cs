@@ -68,10 +68,23 @@ namespace Weathering
         public static void Save(ZDO zdo, int[] stamps)
         {
             if (zdo == null) return;
+            SaveEncoded(zdo, Encode(stamps));
+        }
+
+        /// <summary>The stamps in their saved form, for sending to the zone owner.</summary>
+        public static byte[] Encode(int[] stamps)
+        {
             int length = stamps.Length * sizeof(int);
             if (s_saveBuffer.Length != length) s_saveBuffer = new byte[length];
             Buffer.BlockCopy(stamps, 0, s_saveBuffer, 0, length);
-            zdo.Set(s_stampsKey, Utils.Compress(s_saveBuffer));
+            return Utils.Compress(s_saveBuffer);
+        }
+
+        /// <summary>Saves stamps already in their saved form (from <see cref="Encode"/>).</summary>
+        public static void SaveEncoded(ZDO zdo, byte[] encoded)
+        {
+            if (zdo == null) return;
+            zdo.Set(s_stampsKey, encoded);
         }
 
         public static void EnsureStamped(TerrainComp tc, int[] stamps, int now)

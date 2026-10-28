@@ -27,6 +27,11 @@ recover on its own, the way you would expect nature to.
   zones (64 m squares): a zone heals only while every player is more than the game's simulation
   distance plus one zone away in every direction. With the default simulation distance that means
   at least 6 zones (about 400 m) away, up to 9 zones (about 600 m) at the highest setting.
+- **Overnight:** while everyone sleeps, spots near the sleeping players that are past their delay
+  heal too, and felled trees there regrow, as of the coming morning; you wake up to the change. Your
+  base and everything else that never heals stays protected. A zone still heals at most once per
+  in-game day, catching up only the time since it last healed, so a single night does not wash an
+  area out.
 
 ## Console commands
 
@@ -37,7 +42,8 @@ On the server or host (in single player, your own game). Handy for testing:
   says how many zones away everyone must be.
 - `weathering_status`: how many zones wait to heal and felled trees wait to regrow, and whether
   the zone you stand in is waiting, when it last healed and whether it can heal right now (with
-  how many zones away the nearest player is and how many it needs).
+  how many zones away the nearest player is and how many it needs), and whether everyone is asleep
+  so that zones near players heal overnight.
 - `weathering_clear_sites`: removes every spot where a felled tree waits to regrow. Run it before
   removing the mod (see below).
 

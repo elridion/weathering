@@ -189,7 +189,7 @@ ZNetScene.cs, ZDOVars.cs). This folder is temporary; if it is gone, re-decompile
 
 ### Task 6: Heal runner
 
-Revised: see design.md 'When healing runs'.
+Revised: healing moved to the server and idle zones, see design.md 'When healing runs'. The text below is the original plan.
 
 **Files:**
 - Create: `src/HealRunner.cs` (MonoBehaviour added to the plugin's GameObject in `Awake`)
@@ -239,3 +239,11 @@ Behaviour:
 - [ ] **Step 4:** Report to the user: package path, the in-game test list (fade, erosion look, no
   seams at zone borders, bases and Warden stones protected, paved roads kept, multiplayer sync,
   no hitches), and ask whether to push Warden's commit.
+
+### Task 8: Heal on the server (added later)
+
+Replaced the owner-side runner of Task 6 with server-side healing of saved terrain data (TerrainData, idle test, throttling).
+
+### Task 9: Tree regrowth (added later)
+
+Felled trees leave a marker (TreePatches, RegrowthSites) that RegrowthRunner turns into a sapling after DelayDays. See design.md 'Tree regrowth'.

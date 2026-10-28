@@ -1,6 +1,6 @@
-﻿# Builds package/icon.png (256 x 256, the Thunderstore/Hexium mod icon) from the game-icons.net
+# Builds package/icon.png (256 x 256, the Thunderstore/Hexium mod icon) from the game-icons.net
 # "hills" icon by Delapouite (CC BY 3.0): amber hills on a dark round plate with an amber
-# rim. Heraldry and Spearbreaker use the same plate in their own colours, so the mods read as a set.
+# rim. Heraldry, Spearbreaker and Warden use the same plate in their own colours, so the mods read as a set.
 #
 # The game-icons.net PNG archive (white on transparent) is downloaded to assets/source/ when missing;
 # it is gitignored and only this script uses it.

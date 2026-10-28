@@ -252,6 +252,7 @@ Regrowth happens on the server while nobody is near the zone.
   its stump within 1 m is kept and rechecked an in-game day later; otherwise the sapling ZDO is
   created the way `ZNetView.Awake` creates one (persistent, type, distant flags from the sapling's
   `ZNetView`, rotation, `plantTime` now) and the marker is destroyed after claiming it.
+
 ## Configuration (initial)
 
 | Key | Default | Meaning |

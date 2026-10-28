@@ -111,8 +111,13 @@ nobody is near, without instantiating anything.
 - Only on the server (`ZNet.IsServer()`, so a dedicated server or the host), once the base index is
   built.
 - The server lists the terrain compiler ZDOs incrementally (`GetAllZDOsWithPrefabIterative`, a slice
-  of sectors per frame; a new sweep starts at most every 10 s) and processes at most one zone every
-  0.5 s real time. A zone is a candidate when its flag is set, it is idle, and its last pass is at
+  of sectors per frame; a new sweep starts at most every 10 s) and heals one zone at a time, the
+  next pass starting at least 0.5 s real time after the previous one ended.
+- A pass is spread over frames so big catch-ups do not stutter: one frame decodes and builds the
+  masks and fades paint, erosion runs 24 iterations per frame, and a last frame writes. Nothing is
+  written before that frame. The pass is dropped unwritten (the zone stays flagged and is retried)
+  if the zone stops being idle, the world changes, or at the write the data revision of the zone or
+  of a linked neighbour changed since it was read, or a linked neighbour is no longer idle. A zone is a candidate when its flag is set, it is idle, and its last pass is at
   least one in-game day old. The first time a zone is seen it is only stamped (edits from before the
   mod start their delay) and its last-pass time set; healing starts a day later.
 - Idle: the zone's Chebyshev zone distance from every peer's reference position, and from the

@@ -123,6 +123,8 @@ namespace Weathering
                     RegrowthRunner.Count(out int sites, out int due);
                     Print($"Zones waiting to heal: {HealRunner.CountPending()}. Felled trees waiting to regrow: {sites}, " +
                         $"{due} of them old enough (as of the last sweeps).");
+                    string pass = HealRunner.DescribePass();
+                    if (pass != null) Print(pass);
                 }
                 else
                 {

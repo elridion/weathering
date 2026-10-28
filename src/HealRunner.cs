@@ -17,9 +17,13 @@ namespace Weathering
         // Scheduling.
         private const float SweepInterval = 10f;     // real seconds between the starts of two sweeps
         private const int InspectPerFrame = 256;     // ZDOs looked at per frame while searching for a due zone
-        // Real seconds between heal passes: a pass decodes up to 5 zones and runs up to 240 erosion
-        // iterations, too much to repeat every frame when many zones are due.
+        // Real seconds from the end of one heal pass to the start of the next: a pass decodes up to 5
+        // zones and runs up to 240 erosion iterations, too much to repeat back to back when many
+        // zones are due.
         private const float HealInterval = 0.5f;
+        // Erosion iterations run per frame while a pass is in flight. A whole 240-iteration catch-up
+        // in one frame took tens of milliseconds, a visible stutter for the host.
+        private const int ErosionIterationsPerFrame = 24;
 
         // Used when the simulation distance cannot be read: the largest the game allows (Near 5, Far 2).
         private const int FallbackNear = 5;
@@ -74,10 +78,31 @@ namespace Weathering
         private static readonly Neighbour[] s_neighbours = { new Neighbour(), new Neighbour(), new Neighbour(), new Neighbour() };
         private static readonly List<ZDO> s_found = new List<ZDO>();
 
+        // The heal pass in flight, spread over frames: prepared in one frame, eroded a slice per frame,
+        // written in a last frame. Only one pass runs at a time, and only on the main thread, so the
+        // per-pass buffers above and Healer's scratch buffer are never shared between passes. Nothing
+        // is written to any ZDO before the finish frame, so an aborted pass leaves no trace.
+        private static bool s_passActive;
+        private static ZDO s_passZdo;
+        private static Vector2s s_passZone;
+        private static uint s_passRevision;
+        private static long s_passNow;
+        private static TerrainData s_passData;
+        private static int[] s_passStamps;
+        private static int s_passNowMinutes;
+        private static float s_passDelayMinutes;
+        private static bool s_passPaintPending;
+        private static bool s_passWaiting;
+        private static bool s_passCanErode;
+        private static int s_passIterationsLeft;
+        private static bool s_passEroded;
+        private static bool s_passErosionPending;
+
         private class Neighbour
         {
             public bool Linked;
             public ZDO Zdo;
+            public uint Revision;
             public TerrainData Data;
             public int[] Stamps;
         }
@@ -227,6 +252,7 @@ namespace Weathering
             s_sweepStart = float.NegativeInfinity;
             s_cursor = 0;
             s_nextHealTime = 0f;
+            ClearPass();
         }
 
         private static void Sweep(ZDOMan zdoMan)
@@ -257,8 +283,21 @@ namespace Weathering
             s_cursor = 0;
         }
 
+        /// <summary>The heal pass in flight, for weathering_status; null when there is none.</summary>
+        internal static string DescribePass()
+        {
+            if (!s_passActive) return null;
+            string phase = s_passEroded ? "writing it back" : $"{s_passIterationsLeft} erosion iterations left";
+            return $"Healing zone {s_passZone.x},{s_passZone.y} now: {phase}.";
+        }
+
         private static void HealNext(ZNet net)
         {
+            if (s_passActive)
+            {
+                ContinuePass();
+                return;
+            }
             if (s_cursor >= s_queue.Count || Time.realtimeSinceStartup < s_nextHealTime) return;
             long now = (long)net.GetTimeSeconds();
             long day = DayLength();
@@ -273,39 +312,91 @@ namespace Weathering
                 Vector2s zone = ZoneSystem.GetZone(zdo.GetPosition());
                 if (!IsZoneIdle(zone, zdo)) continue;
 
-                Process(zdo, zone, now, day);
-                s_nextHealTime = Time.realtimeSinceStartup + HealInterval;
+                try
+                {
+                    Prepare(zdo, zone, now, day);
+                }
+                catch (Exception e)
+                {
+                    Fail(zdo, zone, e);
+                }
+                // A zone that was only stamped or could not be read is done in this frame.
+                if (!s_passActive) EndPass();
                 return;
             }
         }
 
-        private static void Process(ZDO zdo, Vector2s zone, long now, long day)
+        // One frame of the pass in flight: a slice of erosion, or the final checks and writes.
+        private static void ContinuePass()
         {
+            ZDO zdo = s_passZdo;
+            Vector2s zone = s_passZone;
             try
             {
-                Heal(zdo, zone, now, day);
+                // Someone came near (or the server loaded it): what is in memory would be saved over
+                // or would overwrite their edits. Drop it; the zone stays pending and is retried.
+                if (!IsCompiler(zdo) || !IsZoneIdle(zone, zdo))
+                {
+                    EndPass();
+                    return;
+                }
+                if (!s_passEroded)
+                {
+                    ErodeSlice();
+                    return;
+                }
+                Finish();
             }
             catch (Exception e)
             {
-                Jotunn.Logger.LogWarning($"Could not heal zone {zone.x},{zone.y}, it will not be retried until it is edited again: {e.Message}");
-                try
-                {
-                    Claim(zdo);
-                    StampStore.SetPending(zdo, false);
-                }
-                catch (Exception)
-                {
-                    // Nothing more can be done for a ZDO that cannot even take a flag.
-                }
+                Fail(zdo, zone, e);
+            }
+            EndPass();
+        }
+
+        private static void Fail(ZDO zdo, Vector2s zone, Exception e)
+        {
+            Jotunn.Logger.LogWarning($"Could not heal zone {zone.x},{zone.y}, it will not be retried until it is edited again: {e.Message}");
+            try
+            {
+                Claim(zdo);
+                StampStore.SetPending(zdo, false);
+            }
+            catch (Exception)
+            {
+                // Nothing more can be done for a ZDO that cannot even take a flag.
             }
         }
 
-        private static void Heal(ZDO zdo, Vector2s zone, long now, long day)
+        // Ends the pass in flight, if any, without writing, and starts the wait before the next one.
+        private static void EndPass()
+        {
+            ClearPass();
+            s_nextHealTime = Time.realtimeSinceStartup + HealInterval;
+        }
+
+        private static void ClearPass()
+        {
+            s_passActive = false;
+            s_passZdo = null;
+            s_passData = null;
+            s_passStamps = null;
+            s_passEroded = false;
+            s_passIterationsLeft = 0;
+            for (int s = 0; s < s_neighbours.Length; s++)
+                ClearNeighbour(s_neighbours[s]);
+        }
+
+        // Decodes the zone and its linked neighbours, builds the masks, fades the paint and loads the
+        // offsets, then leaves the pass in flight for ErodeSlice. Writes only for a zone seen for the
+        // first time or one whose data cannot be read; those end here.
+        private static void Prepare(ZDO zdo, Vector2s zone, long now, long day)
         {
             int width = s_width;
             int pitch = s_pitch;
             int count = pitch * pitch;
 
+            uint revision = zdo.DataRevision;
             if (!TerrainData.TryRead(zdo, pitch, out TerrainData data))
             {
                 if (zdo.GetByteArray(ZDOVars.s_TCData) != null)
@@ -426,27 +517,71 @@ namespace Weathering
             int iterations = Mathf.Min(Mathf.RoundToInt(erosionDays * Healer.IterationsPerDay * erosionRate),
                 Healer.MaxIterationsPerPass);
             iterations = Mathf.Max(iterations, 0);
+
+            s_passActive = true;
+            s_passZdo = zdo;
+            s_passZone = zone;
+            s_passRevision = revision;
+            s_passNow = now;
+            s_passData = data;
+            s_passStamps = stamps;
+            s_passNowMinutes = nowMinutes;
+            s_passDelayMinutes = delayMinutes;
+            s_passPaintPending = paintPending;
+            s_passWaiting = waiting;
             // With erosion off (or too weak for a single iteration in a day) steep pairs would otherwise
             // keep the zone flagged and rewritten every day forever. Judged by a whole day, not this
             // pass, so edits that only just came due still keep the zone flagged for the next pass.
-            bool canErode = Mathf.RoundToInt(Healer.IterationsPerDay * erosionRate) > 0;
-            bool erosionPending = Healer.Erode(offset, frozen, pitch, iterations, Healer.DiffusionRate) && canErode;
-            Healer.ZeroTiny(offset, data.ModifiedHeight, frozen);
+            s_passCanErode = Mathf.RoundToInt(Healer.IterationsPerDay * erosionRate) > 0;
+            s_passIterationsLeft = iterations;
+            s_passEroded = false;
+            s_passErosionPending = false;
+        }
 
-            WriteBackHeights(data, stamps, nowMinutes, delayMinutes);
+        // Runs up to ErosionIterationsPerFrame iterations. Erosion is done when the pass's iterations
+        // are used up or nothing can move any more (further iterations would change nothing); the
+        // last slice's answer is the pass's. A pass with no iterations still runs one empty slice for it.
+        private static void ErodeSlice()
+        {
+            int slice = Math.Min(s_passIterationsLeft, ErosionIterationsPerFrame);
+            bool moving = Healer.Erode(s_offset, s_frozen, s_pitch, slice, Healer.DiffusionRate);
+            s_passIterationsLeft -= slice;
+            s_passErosionPending = moving && s_passCanErode;
+            if (!moving || s_passIterationsLeft <= 0) s_passEroded = true;
+        }
+
+        // Writes the pass back, but only if nothing touched the zone or its linked neighbours since
+        // Prepare read them: a changed data revision means the decoded copy is stale, and writing it
+        // would undo that change. Then the pass is dropped unwritten and the zone, still pending with
+        // its old last-pass time, is retried later.
+        private static void Finish()
+        {
+            ZDO zdo = s_passZdo;
+            if (zdo.DataRevision != s_passRevision) return;
+            for (int s = 0; s < s_neighbours.Length; s++)
+            {
+                Neighbour neighbour = s_neighbours[s];
+                if (!neighbour.Linked) continue;
+                if (!IsCompiler(neighbour.Zdo) || neighbour.Zdo.DataRevision != neighbour.Revision) return;
+                // MirrorBorders may write it, so it must still be safe to write too.
+                if (!IsZoneIdle(ZoneSystem.GetZone(neighbour.Zdo.GetPosition()), neighbour.Zdo)) return;
+            }
+
+            TerrainData data = s_passData;
+            int[] stamps = s_passStamps;
+            Healer.ZeroTiny(s_offset, data.ModifiedHeight, s_frozen);
+
+            WriteBackHeights(data, stamps, s_passNowMinutes, s_passDelayMinutes);
             ClearStaleStamps(data, stamps);
 
             // This zone first: if a neighbour write fails, the zone itself is already consistent.
             Claim(zdo);
             data.Write(zdo);
             StampStore.Save(zdo, stamps);
-            StampStore.SetLast(zdo, now);
-            StampStore.SetPending(zdo, paintPending || erosionPending || waiting);
+            StampStore.SetLast(zdo, s_passNow);
+            StampStore.SetPending(zdo, s_passPaintPending || s_passErosionPending || s_passWaiting);
 
             MirrorBorders(data, stamps);
-
-            for (int s = 0; s < s_neighbours.Length; s++)
-                ClearNeighbour(s_neighbours[s]);
         }
 
         // Height results go back as level = clamped offset, smooth = 0, like vanilla's Level and Raise.
@@ -576,12 +711,14 @@ namespace Weathering
                 var other = new Vector2s(zone.x + s_sideDx[side], zone.y + s_sideDy[side]);
                 if (!s_byZone.TryGetValue(other, out ZDO zdo) || !IsCompiler(zdo)) continue;
                 if (!ZoneSystem.GetZone(zdo.GetPosition()).Equals(other) || !IsZoneIdle(other, zdo)) continue;
+                uint revision = zdo.DataRevision;
                 if (!TerrainData.TryRead(zdo, pitch, out TerrainData data)) continue;
 
                 int[] stamps = StampStore.Load(zdo, pitch * pitch);
                 // Unstamped edits there would be stamped "now" on its first sight; judge them the same way.
                 StampStore.EnsureStamped(data, stamps, nowMinutes);
                 neighbour.Zdo = zdo;
+                neighbour.Revision = revision;
                 neighbour.Data = data;
                 neighbour.Stamps = stamps;
                 neighbour.Linked = true;
@@ -592,6 +729,7 @@ namespace Weathering
         {
             neighbour.Linked = false;
             neighbour.Zdo = null;
+            neighbour.Revision = 0;
             neighbour.Data = null;
             neighbour.Stamps = null;
         }

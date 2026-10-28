@@ -23,6 +23,9 @@ Adds to the workspace-wide `code-style.md` and `valheim-modding.md` in `../.clau
   write terrain data of a zone someone may have loaded: a loaded `TerrainComp` re-saves its whole
   array over it, and clients drop updates whose data revision is not newer than theirs. Claim the
   ZDO with `zdo.SetOwner(ZDOMan.GetSessionID())` before writing and leave ownership to vanilla.
+- A heal pass spans several frames (`HealRunner` prepare, erode slices, finish), one pass at a
+  time. Write no ZDO before the finish frame, and there re-check `IsZoneIdle` and that every ZDO
+  read still has the `DataRevision` it had when decoded; otherwise drop the pass unwritten.
 - Clients hold only the ZDOs near them, so anything that needs every base or Warden stone around a
   zone (up to 180 m) must run on the server.
 - Private vanilla members: patch by string name, call through a cached `AccessTools.MethodDelegate`,

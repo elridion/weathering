@@ -17,6 +17,8 @@ Stack, build, verification and git workflow are shared by all mods: see `../CLAU
 - `src/HealRunner.cs` heals flagged zones on the server while nobody is near (`IsZoneIdle` is the
   shared "safe to write this zone" test); `src/HealCommands.cs` has `weathering_age` and
   `weathering_status`.
+- `src/TreePatches.cs` records a regrowth site when a tree is felled; `src/RegrowthSites.cs`
+  registers the invisible marker prefab, maps trees to their saplings and writes the site keys.
 - `tools/make_icon.ps1` generates `package/icon.png`. `docs/` design notes. `hexium.json` Hexium
   listing metadata.
 - The mod has no player-facing strings: no translations, no `AddLocalizations`.
@@ -25,7 +27,10 @@ Stack, build, verification and git workflow are shared by all mods: see `../CLAU
 
 - **Saved-world compatibility.** Persisted or networked identifiers: plugin GUID
   `elridion.weathering`, ZDO keys `weathering_stamps` (byte[]), `weathering_pending` (bool) and
-  `weathering_last` (long, world time in whole seconds of the last heal pass), and config
+  `weathering_last` (long, world time in whole seconds of the last heal pass), the regrowth marker
+  prefab `weathering_regrowth_site` with ZDO keys `weathering_tree` (int, felled tree prefab hash),
+  `weathering_stump` (int, stump prefab hash, 0 if none) and `weathering_felled` (int, StampStore
+  minutes, at least 1), and config
   section/key names (renaming a key resets users' settings). It also reads Warden's
   `spawnward_radius` (float) and prefab `piece_spawnward`; those belong to Warden.
 - **Removing the mod must leave a valid world.** Only ever write vanilla-valid `TerrainComp` data.

@@ -37,7 +37,7 @@ vanilla player base areas, and leaves vegetation for later.
 
 ## Non-goals (v1)
 
-- Trees, rocks and ore regrowing. Parked in `ideas.md`.
+- Rocks and ore regrowing. Parked in `ideas.md`.
 - Restoring height to the original generated terrain.
 - Healing world-generation terrain changes (locations, dungeons, vanilla `TerrainModifier`s). Only
   player edits stored in `TerrainComp` are touched.
@@ -63,7 +63,7 @@ vanilla player base areas, and leaves vegetation for later.
 - Paved roads stay; only dirt and cultivated fade.
 - Per-spot timing (each vertex its own 3 days), plus a per-zone flag set when edits happen and
   cleared when nothing in the zone is left to heal.
-- Vegetation regrowth: later, recorded in `ideas.md`.
+- Tree regrowth is part of v1 (see Tree regrowth); rocks and ore stay parked in `ideas.md`.
 - Warden saves each stone's radius on its ZDO for Weathering to read; switched-off stones still
   protect.
 - Edits made before install heal too, `DelayDays` after install; no setting.
@@ -229,6 +229,22 @@ saved to the ZDO with a new data revision, so a player who comes back receives t
 like any terrain edit. Clients only record edit stamps on the zones they own. Workspace rule:
 `NetworkCompatibility(EveryoneMustHaveMod, VersionStrictness.Minor)`. Gameplay config is
 admin-only and synced.
+
+### Tree regrowth
+
+Decided with the user (added to v1): only trees regrow, no rocks and no ore. A felled tree comes back
+as the vanilla sapling of that tree, but only where its stump is gone: a stump left standing blocks
+regrowth for that spot. Nothing regrows inside player bases or near player pieces (the same base
+and piece margins as terrain). The delay is the same `DelayDays`, counted from the felling.
+Regrowth happens on the server while nobody is near the zone.
+
+- A felled tree leaves no ZDO, so the site is recorded when it falls: a postfix on the private
+  `TreeBase.SpawnLog`, which vanilla calls once per felled tree on its owner, spawns an invisible
+  persistent marker `weathering_regrowth_site` at the tree's position and rotation. Its ZDO holds
+  `weathering_tree` (tree prefab hash), `weathering_stump` (hash of the `m_stubPrefab` vanilla
+  spawns, 0 if none) and `weathering_felled` (StampStore minutes, at least 1).
+- Tree to sapling comes from every `Plant` prefab's `m_grownPrefabs`, rebuilt on each ZNetScene
+  load; a tree no sapling grows into gets no marker.
 ## Configuration (initial)
 
 | Key | Default | Meaning |

@@ -2,10 +2,10 @@
 
 ## Vegetation regrowth
 
-Parked 2026-10-28; not part of v1. Undecided what should come back after clearing an area.
+Parked 2026-10-28. Trees were then added to v1 (see "Tree regrowth" in `design.md`); rocks and
+ore stay parked.
 
-- Trees: chopped trees come back as saplings that grow into full trees (Regenerative Terrain swaps
-  in growing versions), or respawn after a timer.
+- Trees: done in v1. A felled tree comes back as its vanilla sapling where its stump is gone.
 - Rocks: mined boulders and stones reappear.
 - Ore deposits (copper, tin, silver, ...): probably excluded, as Regenerative Terrain does by
   default, so mining stays a finite resource.

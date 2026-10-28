@@ -54,6 +54,9 @@ namespace Weathering
 
             // Fires on every ZNetScene load, after Jotunn added modded prefabs, so their base areas count.
             PrefabManager.OnPrefabsRegistered += BaseIndex.Build;
+            // Same timing for the sapling map, so saplings from other mods map their trees too.
+            PrefabManager.OnPrefabsRegistered += RegrowthSites.BuildSaplingMap;
+            PrefabManager.OnVanillaPrefabsAvailable += RegrowthSites.Register;
 
             // Does nothing on clients; on the server it heals flagged zones nobody is near.
             gameObject.AddComponent<HealRunner>();

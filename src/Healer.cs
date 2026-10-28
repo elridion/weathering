@@ -15,8 +15,11 @@ namespace Weathering
         public const int IterationsPerDay = 24;
         public const int MaxIterationsPerPass = 240;
 
-        // Stability limit of explicit 4-neighbour diffusion.
-        const float MaxRate = 0.25f;
+        // Rate the runner passes to Erode. 0.25 is only the stability limit of linear diffusion; with
+        // the talus threshold a vertex facing a neighbour with more steep pairs can invert (overshoot)
+        // above 1 / (2 * 4 neighbours), leaving a raised centre in a pit. 0.125 settles monotonically.
+        public const float DiffusionRate = 0.125f;
+        const float MaxRate = DiffusionRate;
 
         // Paved vertices (b above this) never fade.
         const float PavedThreshold = 0.5f;
@@ -32,6 +35,7 @@ namespace Weathering
         /// </summary>
         public static bool FadePaint(Color[] paint, bool[] modifiedPaint, bool[] frozen, bool[] deepNorth, float amount)
         {
+            if (!(amount > 0f)) amount = 0f; // also catches NaN
             bool pending = false;
             for (int i = 0; i < paint.Length; i++)
             {
@@ -59,14 +63,15 @@ namespace Weathering
         public static bool Erode(float[] offset, bool[] frozen, int pitch, int iterations, float rate)
         {
             int count = offset.Length;
-            if (pitch <= 0 || count % pitch != 0) return false;
+            if (pitch <= 0 || count % pitch != 0 || frozen.Length != count) return false;
             int height = count / pitch;
-            rate = Mathf.Clamp(rate, 0f, MaxRate);
+            rate = rate > 0f ? Mathf.Min(rate, MaxRate) : 0f; // also catches NaN
 
-            if (s_scratch.Length != count) s_scratch = new float[count];
+            if (s_scratch.Length < count) s_scratch = new float[count];
             float[] snap = s_scratch;
 
-            for (int it = 0; it < iterations; it++)
+            if (rate > 0f)
+                for (int it = 0; it < iterations; it++)
             {
                 Array.Copy(offset, snap, count);
                 for (int y = 0; y < height; y++)

@@ -173,13 +173,14 @@ ZNetScene.cs, ZDOVars.cs). This folder is temporary; if it is gone, re-decompile
     when r, g, b are all 0, clear `modifiedPaint`. Returns true if anything is still pending.
   - `bool IsPaintPending(Color c)` – `c.b <= 0.5f && (c.r > 0 || c.g > 0)`.
   - `bool Erode(float[] offset, bool[] frozen, int pitch, int iterations, float rate)` – explicit
-    4-neighbour diffusion, `rate` ≤ 0.25, frozen vertices fixed, out-of-grid neighbours ignored
+    4-neighbour diffusion, `rate` ≤ 0.125 (`DiffusionRate`), frozen vertices fixed, out-of-grid neighbours ignored
     (treated as equal to self). Before diffusing, a vertex flows only if some neighbour difference
-    exceeds `TalusSlope` (constant 0.35 m per m) so gentle shapes settle. Returns true if any
-    unfrozen neighbour difference is still above `SettledSlope` (0.05 m per m).
+    exceeds `TalusSlope` (constant 0.35 m per m) so gentle shapes settle. Returns true if any pair
+    with an unfrozen vertex is still steeper than `TalusSlope`. Deep pits end as a permanent
+    0.35-slope dip, never flat ground.
   - `void ZeroTiny(float[] offset, bool[] modifiedHeight, bool[] frozen)` – unfrozen `|d| < 0.02`
     → 0 and `modifiedHeight = false`.
-  - Constants near the top: `TalusSlope`, `SettledSlope`, `ResetEpsilon = 0.02f`,
+  - Constants near the top: `TalusSlope`, `DiffusionRate = 0.125f`, `ResetEpsilon = 0.02f`,
     `IterationsPerDay = 24`, `MaxIterationsPerPass = 240`.
 
 - [ ] **Step 1:** Implement. `Erode` uses a scratch buffer, no allocation per call after the first.

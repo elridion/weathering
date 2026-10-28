@@ -153,9 +153,9 @@ inherit the oldest of the stamps they received from, so spread earth is never "f
 A zone's flag is cleared when every non-frozen modified vertex is settled:
 
 - paint: no dirt or cultivated weight left;
-- height: the steepest offset slope between neighbouring vertices is below `SettledSlope`
-  (for example 0.05 m per m), and offsets below `ResetEpsilon` (for example 2 cm) are zeroed and
-  their `m_modifiedHeight` cleared.
+- height: no pair with an unfrozen vertex is steeper than `TalusSlope` (0.35 m per m), and offsets
+  below `ResetEpsilon` (for example 2 cm) are zeroed and their `m_modifiedHeight` cleared. End
+  state: deep pits settle into a permanent dip with 0.35 m per m slopes, never flat ground.
 
 Vertices frozen by a base, paved paint or a piece do not keep the flag set on their own. They are
 re-examined when an edit happens in the zone again. Consequence: removing a workbench does not

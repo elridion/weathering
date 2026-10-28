@@ -32,8 +32,8 @@ vanilla player base areas, and leaves vegetation for later.
   campfire, hearth and other stations; exact list comes from the prefabs) plus a margin never
   heals, and neither does anything near a Warden stone.
 - **No noticeable performance cost.** Zones carry a "needs healing" flag; only flagged zones are
-  ever examined. Healing is applied as a catch-up when a zone loads, plus at most one step per
-  in-game day for zones that stay loaded, spread so that no two zones rebuild in the same frame.
+  ever examined. Healing runs on the server for idle zones, at most one pass per zone per in-game
+  day, each spot catching up only the time since its own delay ran out (see When healing runs).
 
 ## Non-goals (v1)
 
@@ -121,14 +121,18 @@ nobody is near, without instantiating anything.
   of its terrain compiler loaded. Nobody can have it loaded, so nothing re-saves over the result.
   (A dedicated server's own reference position stays at the world origin and is ignored.)
 - With `ErosionRate` 0, steep slopes alone do not keep a zone flagged.
-- A pass decodes the saved `TCData`, heals it (catch-up for the whole elapsed time, capped), and
+- A pass decodes the saved `TCData`, heals it (catch-up per spot: each vertex fades for the days
+  since its own delay ran out, at most the time since the zone's last pass; erosion runs for the
+  most such days among the unfrozen height edits, capped at 240 iterations), and
   writes it back in vanilla's layout after claiming the ZDO for the server, like vanilla server code
   does. Ownership is left to vanilla's release loop. A zone whose data cannot be read logs one
   warning and loses its flag.
 - Time is world time, so sleeping counts as passing days. One in-game day =
   `EnvMan.instance.m_dayLengthSec` (`long`, default 1,200 s; verified).
 - Test commands on the server or host: `weathering_age <days>` (ages edits within 3 zones) and
-  `weathering_status`.
+  `weathering_status`. `weathering_clear_sites` destroys every regrowth marker; run before removing
+  the mod, since clients of a dedicated server log "Missing prefab hash" each frame for markers
+  whose prefab is gone. Stump-blocked markers are never dropped automatically (decided with the user).
 ### Which vertices may heal
 
 A vertex is **frozen** (left as is and treated as a fixed boundary for erosion) when any of:

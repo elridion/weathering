@@ -30,16 +30,18 @@ namespace Weathering
         public static bool IsPaintPending(Color c) => c.b <= PavedThreshold && (c.r > 0f || c.g > 0f);
 
         /// <summary>
-        /// Moves dirt (r) and cultivated (g) paint toward 0 by <paramref name="amount"/> on unfrozen,
-        /// non-Deep-North vertices. Returns true while any such vertex still holds paint.
+        /// Moves dirt (r) and cultivated (g) paint toward 0 by each vertex's own entry in
+        /// <paramref name="amounts"/> on unfrozen, non-Deep-North vertices, so every spot fades only for
+        /// the time since its own delay ran out. Returns true while any such vertex still holds paint.
         /// </summary>
-        public static bool FadePaint(Color[] paint, bool[] modifiedPaint, bool[] frozen, bool[] deepNorth, float amount)
+        public static bool FadePaint(Color[] paint, bool[] modifiedPaint, bool[] frozen, bool[] deepNorth, float[] amounts)
         {
-            if (!(amount > 0f)) amount = 0f; // also catches NaN
             bool pending = false;
             for (int i = 0; i < paint.Length; i++)
             {
                 if (!modifiedPaint[i] || frozen[i] || deepNorth[i]) continue;
+                float amount = amounts[i];
+                if (!(amount > 0f)) amount = 0f; // also catches NaN
                 Color c = paint[i];
                 if (float.IsNaN(c.r) || float.IsNaN(c.g) || float.IsNaN(c.b)) continue;
                 if (c.b > PavedThreshold) continue;

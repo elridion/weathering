@@ -69,6 +69,7 @@ namespace Weathering
         private static bool[] s_deepNorth = new bool[0];
         private static float[] s_offset = new float[0];
         private static int[] s_stampSnapshot = new int[0];
+        private static float[] s_fadeAmount = new float[0];
         private static readonly List<ProtectedCircle> s_circles = new List<ProtectedCircle>();
         private static readonly Neighbour[] s_neighbours = { new Neighbour(), new Neighbour(), new Neighbour(), new Neighbour() };
         private static readonly List<ZDO> s_found = new List<ZDO>();
@@ -330,11 +331,17 @@ namespace Weathering
 
             float elapsedDays = Mathf.Max(0f, (now - last) / (float)day);
             float delayMinutes = WeatheringPlugin.DelayDays.Value * day / 60f;
+            float dayMinutes = day / 60f;
+            float fadeDays = WeatheringPlugin.FadeDays.Value;
 
             EnsureBuffers(count);
             bool[] frozen = s_frozen;
             bool[] deepNorth = s_deepNorth;
             float[] offset = s_offset;
+            float[] fadeAmount = s_fadeAmount;
+            // The most days any unfrozen height edit has been past its delay since the last pass; a zone
+            // whose edits only just came due gets that much erosion, not the whole time since the last pass.
+            float erosionDays = 0f;
 
             BaseIndex.Collect(zone, s_circles);
             LoadNeighbours(zone, pitch, nowMinutes);
@@ -362,7 +369,8 @@ namespace Weathering
                     deepNorth[i] = modifiedPaint && worldGen != null &&
                         worldGen.GetBiome(wx, wz) == Heightmap.Biome.DeepNorth;
 
-                    bool fresh = IsFresh(stamps[i], nowMinutes, delayMinutes);
+                    int spotStamp = stamps[i];
+                    bool fresh = IsFresh(spotStamp, nowMinutes, delayMinutes);
                     bool held = float.IsNaN(d) || fresh || (modifiedPaint && paint.b > PavedThreshold);
 
                     int side = BorderSide(x, y, width);
@@ -382,7 +390,10 @@ namespace Weathering
                         {
                             // The shared vertex moves only if both zones agree it may.
                             int j = MirrorIndex(side, x, y, width, pitch);
-                            if (IsFresh(neighbour.Stamps[j], nowMinutes, delayMinutes)) fresh = held = true;
+                            int otherStamp = neighbour.Stamps[j];
+                            if (IsFresh(otherStamp, nowMinutes, delayMinutes)) fresh = held = true;
+                            // The shared vertex heals only for as long as both copies have been due.
+                            if (otherStamp > spotStamp) spotStamp = otherStamp;
                             if (neighbour.Data.ModifiedPaint[j] && neighbour.Data.Paint[j].b > PavedThreshold) held = true;
                         }
                     }
@@ -400,19 +411,24 @@ namespace Weathering
 
                     frozen[i] = held;
                     if (fresh && StampStore.NeedsStamp(modifiedHeight, modifiedPaint, paint)) waiting = true;
+
+                    float spotDays = DueDays(spotStamp, elapsedDays, nowMinutes, delayMinutes, dayMinutes);
+                    fadeAmount[i] = fadeDays > 0f ? spotDays / fadeDays : 0f;
+                    if (!held && modifiedHeight && spotDays > erosionDays) erosionDays = spotDays;
                 }
             }
 
-            float fadeDays = WeatheringPlugin.FadeDays.Value;
-            bool paintPending = Healer.FadePaint(data.Paint, data.ModifiedPaint, frozen, deepNorth,
-                fadeDays > 0f ? elapsedDays / fadeDays : 0f);
+            bool paintPending = Healer.FadePaint(data.Paint, data.ModifiedPaint, frozen, deepNorth, fadeAmount);
 
-            int iterations = Mathf.Min(Mathf.RoundToInt(elapsedDays * Healer.IterationsPerDay * WeatheringPlugin.ErosionRate.Value),
+            float erosionRate = WeatheringPlugin.ErosionRate.Value;
+            int iterations = Mathf.Min(Mathf.RoundToInt(erosionDays * Healer.IterationsPerDay * erosionRate),
                 Healer.MaxIterationsPerPass);
             iterations = Mathf.Max(iterations, 0);
-            // With erosion off (or too weak for a single iteration) steep pairs would otherwise keep
-            // the zone flagged and rewritten every day forever.
-            bool erosionPending = Healer.Erode(offset, frozen, pitch, iterations, Healer.DiffusionRate) && iterations > 0;
+            // With erosion off (or too weak for a single iteration in a day) steep pairs would otherwise
+            // keep the zone flagged and rewritten every day forever. Judged by a whole day, not this
+            // pass, so edits that only just came due still keep the zone flagged for the next pass.
+            bool canErode = Mathf.RoundToInt(Healer.IterationsPerDay * erosionRate) > 0;
+            bool erosionPending = Healer.Erode(offset, frozen, pitch, iterations, Healer.DiffusionRate) && canErode;
             Healer.ZeroTiny(offset, data.ModifiedHeight, frozen);
 
             WriteBackHeights(data, stamps, nowMinutes, delayMinutes);
@@ -585,10 +601,21 @@ namespace Weathering
             s_deepNorth = new bool[count];
             s_offset = new float[count];
             s_stampSnapshot = new int[count];
+            s_fadeAmount = new float[count];
         }
 
         private static bool IsFresh(int stamp, int nowMinutes, float delayMinutes) =>
             stamp != 0 && nowMinutes - stamp < delayMinutes;
+
+        // Days a spot has been past its own delay, but no more than the time since the zone's last pass
+        // (anything earlier was healed then). A vertex without a stamp holds nothing to heal and simply
+        // takes the whole elapsed time.
+        private static float DueDays(int stamp, float elapsedDays, int nowMinutes, float delayMinutes, float dayMinutes)
+        {
+            if (stamp == 0) return elapsedDays;
+            float due = (nowMinutes - stamp - delayMinutes) / dayMinutes;
+            return Mathf.Max(0f, Mathf.Min(elapsedDays, due));
+        }
 
         private static bool IsCompiler(ZDO zdo) => zdo != null && zdo.IsValid() && zdo.GetPrefab() == s_compilerHash;
 

@@ -15,8 +15,8 @@ Stack, build, verification and git workflow are shared by all mods: see `../CLAU
 - `src/Healer.cs` is the pure paint-fade and erosion math.
 - `src/TerrainData.cs` decodes and encodes a zone's saved `TCData` without a `TerrainComp`.
 - `src/HealRunner.cs` heals flagged zones on the server while nobody is near (`IsZoneIdle` is the
-  shared "safe to write this zone" test); `src/HealCommands.cs` has `weathering_age` and
-  `weathering_status`.
+  shared "safe to write this zone" test); `src/HealCommands.cs` has `weathering_age`,
+  `weathering_status` and `weathering_clear_sites`.
 - `src/TreePatches.cs` records a regrowth site when a tree is felled; `src/RegrowthSites.cs`
   registers the invisible marker prefab, maps trees to their saplings and writes the site keys.
   `src/RegrowthRunner.cs` sweeps the sites on the server and, once due and idle, drops sites inside

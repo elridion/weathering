@@ -49,7 +49,7 @@ namespace Weathering
                     new AcceptableValueRange<float>(0f, 20f), adminOnly));
             ExtraBasePieces = Config.Bind("General", "ExtraBasePieces", "",
                 new ConfigDescription("Extra prefabs that count as a base, as a comma-separated list of prefab:radius in meters " +
-                    "(for example piece_example:30). Use it for modded pieces that vanilla does not treat as a base.",
+                    "(for example piece_example:30, radius above 0, up to 500). Use it for modded pieces that vanilla does not treat as a base.",
                     null, adminOnly));
 
             // Fires on every ZNetScene load, after Jotunn added modded prefabs, so their base areas count.

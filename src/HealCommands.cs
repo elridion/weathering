@@ -20,7 +20,13 @@ namespace Weathering
         {
             CommandManager.Instance.AddConsoleCommand(new AgeCommand());
             CommandManager.Instance.AddConsoleCommand(new StatusCommand());
+            CommandManager.Instance.AddConsoleCommand(new ClearSitesCommand());
         }
+
+        // How far away everyone must be for a zone to heal. Zones counted in a square (Chebyshev), so
+        // no single meter figure fits: a zone 64 m wide counts the same along an edge and a diagonal.
+        private static string DescribeIdleDistance() =>
+            $"more than {HealRunner.IdleDistance()} zones (64 m each, counted in a square) away";
 
         private static void Print(string text)
         {
@@ -99,7 +105,7 @@ namespace Weathering
                 }
 
                 Print($"Aged {zones} edited zones and {zdos.Count} felled trees by {days.ToString(CultureInfo.InvariantCulture)} days. " +
-                    $"Walk more than {HealRunner.IdleDistance() * 64} m away to let them heal and regrow.");
+                    $"They heal and regrow once every player is {DescribeIdleDistance()}.");
             }
         }
 
@@ -147,10 +153,50 @@ namespace Weathering
             {
                 int distance = HealRunner.NearestViewerDistance(zone);
                 int needed = HealRunner.IdleDistance();
+                string nearest = distance == int.MaxValue ? "no player is online" : $"the nearest player is {distance} zones away";
                 if (distance <= needed)
-                    return $"no (a player is {distance} zones away; healing needs everyone more than {needed} zones away)";
-                if (!HealRunner.IsZoneIdle(zone, zdo)) return "no (the zone is loaded on the server)";
-                return "yes";
+                    return $"no ({nearest}; healing needs everyone {DescribeIdleDistance()})";
+                if (!HealRunner.IsZoneIdle(zone, zdo)) return $"no (the zone is loaded on the server; {nearest})";
+                return $"yes ({nearest})";
+            }
+        }
+
+        // Without the mod the marker prefab is unknown, and clients of a dedicated server log
+        // "Missing prefab hash" for every marker near them each frame; run this before removing the mod.
+        private class ClearSitesCommand : ConsoleCommand
+        {
+            public override string Name => "weathering_clear_sites";
+
+            public override string Help =>
+                "- remove every felled-tree regrowth site from the world, so those trees no longer regrow; " +
+                "run it before removing the mod (server or host)";
+
+            public override void Run(string[] args)
+            {
+                if (!CheckServer()) return;
+                ZDOMan zdoMan = ZDOMan.instance;
+                if (zdoMan == null)
+                {
+                    Print("Weathering is not ready yet.");
+                    return;
+                }
+
+                var sites = new List<ZDO>();
+                int index = 0;
+                while (!zdoMan.GetAllZDOsWithPrefabIterative(RegrowthSites.MarkerName, sites, ref index)) { }
+
+                // Vanilla lists sector 0 twice; destroy each site once.
+                var seen = new HashSet<ZDOID>();
+                int removed = 0;
+                foreach (ZDO zdo in sites)
+                {
+                    if (zdo == null || !zdo.IsValid() || zdo.GetPrefab() != RegrowthSites.MarkerHash || !seen.Add(zdo.m_uid)) continue;
+                    RegrowthRunner.ForgetBlocked(zdo);
+                    HealRunner.Claim(zdo);
+                    zdoMan.DestroyZDO(zdo);
+                    removed++;
+                }
+                Print($"Removed {removed} regrowth sites. Healed terrain stays as it is.");
             }
         }
     }

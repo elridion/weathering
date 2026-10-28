@@ -11,3 +11,5 @@
   Trees with no sapling (such as autumn birches) do not regrow.
 - Ground heals on the server (or host) while no player is nearby, so you find it weathered when
   you come back. Test commands for the server or host: `weathering_age` and `weathering_status`.
+- `weathering_clear_sites` removes every felled-tree regrowth spot; run it on the server or host
+  before removing the mod.

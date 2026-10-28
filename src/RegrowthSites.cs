@@ -82,6 +82,11 @@ namespace Weathering
 
             int treeHash = nview.GetZDO().GetPrefab();
             if (!s_saplings.ContainsKey(treeHash)) return;
+            // Inside a base the server drops the site anyway, but only once that zone is idle, so
+            // around a lived-in base the markers would pile up. The base's objects are loaded here on
+            // the felling owner; Warden stones count when their PlayerBase area is on, and the
+            // server's check catches the rest (margins, buildings, Warden-only radii).
+            if (EffectArea.IsPointInsideArea(tree.transform.position, EffectArea.Type.PlayerBase)) return;
 
             var marker = UnityEngine.Object.Instantiate(s_marker, tree.transform.position, tree.transform.rotation);
             var markerView = marker.GetComponent<ZNetView>();

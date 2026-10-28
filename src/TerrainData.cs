@@ -39,57 +39,69 @@ namespace Weathering
         /// <summary>The same, on compressed TCData bytes (as received for an overnight heal).</summary>
         public static bool TryRead(byte[] compressed, int pitch, out TerrainData data)
         {
-            data = null;
+            var result = new TerrainData();
+            data = result.Read(compressed, pitch) ? result : null;
+            return data != null;
+        }
+
+        /// <summary>
+        /// Reads the ZDO's TCData into this instance, reusing its arrays, so the heal runner decodes up
+        /// to nine zones per pass without allocating them anew. The contents are undefined after false.
+        /// </summary>
+        public bool Read(ZDO zdo, int pitch) => zdo != null && Read(zdo.GetByteArray(ZDOVars.s_TCData), pitch);
+
+        private bool Read(byte[] compressed, int pitch)
+        {
             if (compressed == null || pitch < 2) return false;
 
             int width = pitch - 1;
             int count = pitch * pitch;
-            var result = new TerrainData
+            Pitch = pitch;
+            if (ModifiedHeight == null || ModifiedHeight.Length != count)
             {
-                Pitch = pitch,
-                ModifiedHeight = new bool[count],
-                LevelDelta = new float[count],
-                SmoothDelta = new float[count],
-                ModifiedPaint = new bool[count],
-                Paint = new Color[count],
-            };
+                ModifiedHeight = new bool[count];
+                LevelDelta = new float[count];
+                SmoothDelta = new float[count];
+                ModifiedPaint = new bool[count];
+                Paint = new Color[count];
+            }
 
             try
             {
                 var pkg = new ZPackage(Utils.Decompress(compressed));
-                result.Version = pkg.ReadInt();
-                result.Operations = pkg.ReadInt();
-                result.LastOpPoint = pkg.ReadVector3();
-                result.LastOpRadius = pkg.ReadSingle();
+                Version = pkg.ReadInt();
+                Operations = pkg.ReadInt();
+                LastOpPoint = pkg.ReadVector3();
+                LastOpRadius = pkg.ReadSingle();
 
                 if (pkg.ReadInt() != count) return false;
                 for (int i = 0; i < count; i++)
                 {
-                    result.ModifiedHeight[i] = pkg.ReadBool();
-                    if (!result.ModifiedHeight[i]) continue;
-                    result.LevelDelta[i] = pkg.ReadSingle();
-                    result.SmoothDelta[i] = pkg.ReadSingle();
+                    bool modified = pkg.ReadBool();
+                    ModifiedHeight[i] = modified;
+                    LevelDelta[i] = modified ? pkg.ReadSingle() : 0f;
+                    SmoothDelta[i] = modified ? pkg.ReadSingle() : 0f;
                 }
 
                 // Vanilla reads any paint count up to the array size; more would overflow there too.
                 int paintCount = pkg.ReadInt();
                 if (paintCount < 0 || paintCount > count) return false;
-                for (int j = 0; j < paintCount; j++)
+                for (int j = 0; j < count; j++)
                 {
-                    result.ModifiedPaint[j] = pkg.ReadBool();
-                    if (!result.ModifiedPaint[j]) continue;
-                    result.Paint[j] = new Color(pkg.ReadSingle(), pkg.ReadSingle(), pkg.ReadSingle(), pkg.ReadSingle());
+                    bool modified = j < paintCount && pkg.ReadBool();
+                    ModifiedPaint[j] = modified;
+                    Paint[j] = modified
+                        ? new Color(pkg.ReadSingle(), pkg.ReadSingle(), pkg.ReadSingle(), pkg.ReadSingle())
+                        : default(Color);
                 }
 
-                if (paintCount == width * width) RemapLegacyPaint(result, width);
+                if (paintCount == width * width) RemapLegacyPaint(this, width);
             }
             catch (Exception)
             {
                 // Truncated or undecompressable data: vanilla would throw on it as well.
                 return false;
             }
-
-            data = result;
             return true;
         }
 

@@ -24,6 +24,10 @@ namespace Weathering
         // A stump this close to the site is the felled tree's own (vanilla spawns it at the tree's position).
         private const float StumpRadius = 1f;
 
+        // Ground under a site.
+        private const float MaxTerrainDelta = 8f;    // vanilla clamps an edited vertex to its base height +-8 m
+        private const float SunkTolerance = 1f;      // ground this much lower than the tree and under water drops the site
+
         // Sweep state, the same shape as the heal runner's: a sweep fills s_scan a few hundred sectors
         // per frame and replaces the queue when it completes.
         private static ZDOMan s_zdoMan;
@@ -45,6 +49,8 @@ namespace Weathering
         private static Vector2s s_circlesZone;
         private static int s_circlesFrame = -1;
         private static readonly List<ZDO> s_found = new List<ZDO>();
+        private static readonly List<ZDO> s_compilers = new List<ZDO>();
+        private static float s_gridScale;
 
         private void Update()
         {
@@ -221,8 +227,156 @@ namespace Weathering
                 return;
             }
 
+            // The ground may have been dug, raised or eroded since the tree fell, and Plant.Grow spawns
+            // the tree where the sapling stands without snapping it down: plant on the ground as it is now.
+            if (!TryGetPlantHeight(pos, zone, out float height))
+            {
+                DestroySite(site);
+                return;
+            }
+            pos.y = height;
+
             PlantSapling(view, saplingHash, pos, site.GetRotation(), prefab.transform.localScale, nowSeconds);
             DestroySite(site);
+        }
+
+        // False when the ground has been dug down under water since the felling: nothing regrows there.
+        private static bool TryGetPlantHeight(Vector3 pos, Vector2s zone, out float height)
+        {
+            height = pos.y;
+            if (!TryGetGroundHeight(pos, zone, out float ground)) return true;
+            height = ground;
+            ZoneSystem zoneSystem = ZoneSystem.instance;
+            float water = zoneSystem ? zoneSystem.m_waterLevel : ZoneSystem.c_WaterLevel;
+            // Some trees stand in shallow water to begin with: only ground that sank there counts.
+            return ground >= water || ground >= pos.y - SunkTolerance;
+        }
+
+        // False when the site's saved height is the best guess: the ground there is as generated.
+        private static bool TryGetGroundHeight(Vector3 pos, Vector2s zone, out float height)
+        {
+            // A zone loaded here (a listen host in sleep mode) knows its ground exactly, location
+            // levelling included. The check skips distant LOD terrain, which has no collider.
+            ZoneSystem zoneSystem = ZoneSystem.instance;
+            if (zoneSystem && Heightmap.FindHeightmap(pos) && zoneSystem.GetGroundHeight(pos, out height)) return true;
+            return TryGetSavedGroundHeight(pos, zone, out height);
+        }
+
+        // The ground from the zone's saved terrain edits: the generated height as HeightmapBuilder
+        // blends it across the zone's corner biomes, plus each vertex's edit clamped as
+        // TerrainComp.ApplyToHeightmap does, bilinear between the four vertices around the site.
+        // Location levelling (TerrainModifier) is not known without the location loaded, so a spot
+        // no player edit touches keeps the felled tree's own height, which already includes it.
+        private static bool TryGetSavedGroundHeight(Vector3 pos, Vector2s zone, out float height)
+        {
+            height = 0f;
+            WorldGenerator worldGen = WorldGenerator.instance;
+            float scale = GridScale();
+            if (worldGen == null || scale <= 0f || !HealRunner.EnsureGrid()) return false;
+            int pitch = HealRunner.Pitch;
+            ZDO compiler = FindCompiler(zone);
+            if (compiler == null || !TerrainData.TryRead(compiler, pitch, out TerrainData data)) return false;
+
+            int width = pitch - 1;
+            float span = width * scale;
+            Vector3 center = ZoneSystem.GetZonePos(zone);
+            float x0 = center.x - span * 0.5f;
+            float z0 = center.z - span * 0.5f;
+            float gx = Mathf.Clamp((pos.x - x0) / scale, 0f, width);
+            float gz = Mathf.Clamp((pos.z - z0) / scale, 0f, width);
+            int ix = Mathf.Min((int)gx, width - 1);
+            int iz = Mathf.Min((int)gz, width - 1);
+
+            bool edited = false;
+            for (int k = iz; k <= iz + 1 && !edited; k++)
+            {
+                for (int l = ix; l <= ix + 1; l++)
+                {
+                    int i = k * pitch + l;
+                    if (data.LevelDelta[i] == 0f && data.SmoothDelta[i] == 0f) continue;
+                    edited = true;
+                    break;
+                }
+            }
+            if (!edited) return false;
+
+            var corners = new GridCorners
+            {
+                Low = worldGen.GetBiome(x0, z0),
+                HighX = worldGen.GetBiome(x0 + span, z0),
+                HighZ = worldGen.GetBiome(x0, z0 + span),
+                High = worldGen.GetBiome(x0 + span, z0 + span),
+            };
+            float h00 = VertexHeight(worldGen, data, corners, x0, z0, scale, width, ix, iz);
+            float h10 = VertexHeight(worldGen, data, corners, x0, z0, scale, width, ix + 1, iz);
+            float h01 = VertexHeight(worldGen, data, corners, x0, z0, scale, width, ix, iz + 1);
+            float h11 = VertexHeight(worldGen, data, corners, x0, z0, scale, width, ix + 1, iz + 1);
+            float fx = gx - ix;
+            float fz = gz - iz;
+            height = Mathf.Lerp(Mathf.Lerp(h00, h10, fx), Mathf.Lerp(h01, h11, fx), fz);
+            return true;
+        }
+
+        private struct GridCorners
+        {
+            public Heightmap.Biome Low;
+            public Heightmap.Biome HighX;
+            public Heightmap.Biome HighZ;
+            public Heightmap.Biome High;
+        }
+
+        // HeightmapBuilder.Build for one vertex (not distant LOD), then TerrainComp.ApplyToHeightmap.
+        private static float VertexHeight(WorldGenerator worldGen, TerrainData data, GridCorners corners, float x0, float z0,
+            float scale, int width, int l, int k)
+        {
+            float wx = x0 + l * scale;
+            float wz = z0 + k * scale;
+            float baseHeight;
+            if (corners.HighZ == corners.Low && corners.HighX == corners.Low && corners.High == corners.Low)
+            {
+                baseHeight = worldGen.GetBiomeHeight(corners.Low, wx, wz, out _);
+            }
+            else
+            {
+                float tx = Mathf.SmoothStep(0f, 1f, (float)l / width);
+                float tz = Mathf.SmoothStep(0f, 1f, (float)k / width);
+                float low = Mathf.LerpUnclamped(worldGen.GetBiomeHeight(corners.Low, wx, wz, out _),
+                    worldGen.GetBiomeHeight(corners.HighX, wx, wz, out _), tx);
+                float high = Mathf.LerpUnclamped(worldGen.GetBiomeHeight(corners.HighZ, wx, wz, out _),
+                    worldGen.GetBiomeHeight(corners.High, wx, wz, out _), tx);
+                baseHeight = Mathf.LerpUnclamped(low, high, tz);
+            }
+
+            int i = k * (width + 1) + l;
+            float delta = data.LevelDelta[i] + data.SmoothDelta[i];
+            if (delta == 0f) return baseHeight;
+            return Mathf.Clamp(baseHeight + delta, baseHeight - MaxTerrainDelta, baseHeight + MaxTerrainDelta);
+        }
+
+        // Vanilla's TerrainComp.FindTerrainCompiler takes the first compiler inside the zone too.
+        private static ZDO FindCompiler(Vector2s zone)
+        {
+            HealRunner.FindCompilers(zone, 0, s_compilers);
+            ZDO result = null;
+            foreach (ZDO zdo in s_compilers)
+            {
+                if (!ZoneSystem.GetZone(zdo.GetPosition()).Equals(zone)) continue;
+                result = zdo;
+                break;
+            }
+            s_compilers.Clear();
+            return result;
+        }
+
+        private static float GridScale()
+        {
+            if (s_gridScale > 0f) return s_gridScale;
+            ZoneSystem zoneSystem = ZoneSystem.instance;
+            Heightmap heightmap = zoneSystem && zoneSystem.m_zonePrefab
+                ? zoneSystem.m_zonePrefab.GetComponentInChildren<Heightmap>(true)
+                : null;
+            if (heightmap) s_gridScale = heightmap.m_scale;
+            return s_gridScale;
         }
 
         // What ZNetView.Awake does for a new object, minus the instance: the server owns the new ZDO,

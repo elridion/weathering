@@ -85,7 +85,16 @@ namespace Weathering
         private static float[] s_fadeAmount = new float[0];
         private static readonly List<ProtectedCircle> s_circles = new List<ProtectedCircle>();
         private static readonly Neighbour[] s_neighbours = { new Neighbour(), new Neighbour(), new Neighbour(), new Neighbour() };
+        // Diagonal neighbours by corner (CornerId), linked only to let a modified corner vertex move.
+        private static readonly Neighbour[] s_diagonals = { new Neighbour(), new Neighbour(), new Neighbour(), new Neighbour() };
         private static readonly List<ZDO> s_found = new List<ZDO>();
+        // The pass's own decode buffers, reused from pass to pass.
+        private static readonly TerrainData s_passDataBuffer = new TerrainData();
+        private static int[] s_passStampsBuffer = new int[0];
+
+        // Neighbours whose border a pass just rewrote. They are healed next, whenever their last pass
+        // was, so their side of the border catches up instead of keeping a step for up to a day.
+        private static readonly List<ZDO> s_dueNow = new List<ZDO>();
 
         // The heal pass in flight, spread over frames: prepared in one frame, eroded a slice per frame,
         // written in a last frame. Only one pass runs at a time, and only on the main thread, so the
@@ -119,16 +128,21 @@ namespace Weathering
         private static bool s_wasSleeping;
         private static readonly System.Diagnostics.Stopwatch s_frameTimer = new System.Diagnostics.Stopwatch();
 
+        // Data and Stamps are decode buffers owned by the entry and reused; valid only while Linked.
         private class Neighbour
         {
             public bool Linked;
+            public bool Changed;
             public ZDO Zdo;
             public uint Revision;
-            public TerrainData Data;
-            public int[] Stamps;
+            public readonly TerrainData Data = new TerrainData();
+            public int[] Stamps = new int[0];
         }
 
         internal static int Pitch => s_pitch;
+
+        /// <summary>Meters between two grid vertices, read from the zone prefab with EnsureGrid.</summary>
+        internal static float Scale => s_scale;
 
         private void Update()
         {
@@ -154,23 +168,21 @@ namespace Weathering
         }
 
         /// <summary>
-        /// True when no peer and not the server's own player is close enough to have the zone loaded,
-        /// even as a ghost zone: its Chebyshev zone distance from every reference position is above
-        /// Near + Far + 1 of the largest simulation distance in use. Server only. Anything that writes
-        /// saved data of unloaded zones (healing, tree regrowth) must check this first. Sleep mode is
-        /// the one exception: regrowth then works near players, and the heal runner writes a zone
-        /// itself only when WriterOf names the server; a zone a connected peer owns is applied by
-        /// that peer (HealApply).
+        /// True when no peer and not the host is close enough to have the zone loaded, even as a ghost
+        /// zone: its Chebyshev zone distance from every reference position is above Near + Far + 1 of
+        /// the largest simulation distance in use. Server only. Anything that writes saved data of
+        /// zones nobody is near (healing, tree regrowth) must check this first. Sleep mode is the one
+        /// exception: regrowth then works near players, and the heal runner writes a zone itself only
+        /// when WriterOf names the server; a zone a connected peer owns is applied by that peer
+        /// (HealApply).
+        /// A dedicated server keeps the zones around the world origin loaded itself (its reference
+        /// position never moves). Those still count as idle: no player is there to edit them, and the
+        /// heal runner makes the loaded TerrainComp reload what it writes at once (Commit).
         /// </summary>
         internal static bool IsZoneIdle(Vector2s zone) => NearestViewerDistance(zone) > IdleDistance();
 
-        /// <summary>IsZoneIdle, and the server has no instance of this ZDO loaded either.</summary>
-        internal static bool IsZoneIdle(Vector2s zone, ZDO zdo)
-        {
-            if (!IsZoneIdle(zone)) return false;
-            ZNetScene scene = ZNetScene.instance;
-            return !scene || !scene.FindInstance(zdo);
-        }
+        /// <summary>The same as IsZoneIdle(zone); the ZDO's own instance on the server does not matter.</summary>
+        internal static bool IsZoneIdle(Vector2s zone, ZDO zdo) => IsZoneIdle(zone);
 
         /// <summary>Zone distance a viewer must be beyond for a zone to count as idle. Cached per frame.</summary>
         internal static int IdleDistance()
@@ -202,16 +214,16 @@ namespace Weathering
             return near + far + 1;
         }
 
-        /// <summary>Chebyshev zone distance to the nearest peer, or to the host's own player.</summary>
+        /// <summary>Chebyshev zone distance to the nearest peer, or to the host.</summary>
         internal static int NearestViewerDistance(Vector2s zone)
         {
             ZNet net = ZNet.instance;
             if (!net) return int.MaxValue;
             int best = int.MaxValue;
             // A dedicated server has no player and its reference position stays at the world origin,
-            // which would keep the spawn area from ever healing. Whatever the server itself has
-            // loaded is caught by the FindInstance check instead.
-            if (Player.m_localPlayer) best = ZoneDistance(zone, ZoneSystem.GetZone(net.GetReferencePosition()));
+            // which would keep the spawn area from ever healing; see IsZoneIdle for why its own loaded
+            // zones are safe to write. A host counts even while its player is dead or not yet spawned.
+            if (!net.IsDedicated()) best = ZoneDistance(zone, ZoneSystem.GetZone(net.GetReferencePosition()));
             foreach (ZNetPeer peer in net.GetPeers())
                 best = Math.Min(best, ZoneDistance(zone, ZoneSystem.GetZone(peer.GetRefPos())));
             return best;
@@ -323,7 +335,8 @@ namespace Weathering
                 if (stamps != null) StampStore.Save(zdo, stamps);
                 if (last != 0L) StampStore.SetLast(zdo, last);
                 StampStore.SetPending(zdo, pending);
-                // In sleep mode the zone may be loaded here (the host's own); see HealApply.ReloadLoaded.
+                // The zone may be loaded here: the host's own in sleep mode, or a dedicated server's
+                // around the world origin. See HealApply.ReloadLoaded.
                 HealApply.ReloadLoaded(zdo);
                 return;
             }
@@ -366,6 +379,7 @@ namespace Weathering
             s_cursor = 0;
             s_nextHealTime = 0f;
             s_sent.Clear();
+            s_dueNow.Clear();
             s_wasSleeping = false;
             ClearPass();
         }
@@ -417,19 +431,37 @@ namespace Weathering
             // round again and again, so zones keep being picked up until the skip ends.
             if (!sleeping && Time.realtimeSinceStartup < s_nextHealTime) return;
             if (sleeping && s_cursor >= s_queue.Count) s_cursor = 0;
-            if (s_cursor >= s_queue.Count) return;
+            if (s_dueNow.Count == 0 && s_cursor >= s_queue.Count) return;
             long now = PassTime();
             long day = DayLength();
             s_frameTimer.Reset();
             s_frameTimer.Start();
 
-            for (int n = 0; n < InspectPerFrame && s_cursor < s_queue.Count; n++)
+            for (int n = 0; n < InspectPerFrame; n++)
             {
-                ZDO zdo = s_queue[s_cursor++];
-                if (!IsCompiler(zdo) || !StampStore.IsPending(zdo)) continue;
+                ZDO zdo;
+                bool dueNow = s_dueNow.Count > 0;
+                if (dueNow)
+                {
+                    zdo = s_dueNow[s_dueNow.Count - 1];
+                    s_dueNow.RemoveAt(s_dueNow.Count - 1);
+                }
+                else if (s_cursor < s_queue.Count)
+                {
+                    zdo = s_queue[s_cursor++];
+                }
+                else
+                {
+                    return;
+                }
+                if (!IsCompiler(zdo)) continue;
                 long last = StampStore.GetLast(zdo);
+                // A zone never seen is looked at even without the flag: edits made before the mod was
+                // installed, in a zone nobody edited since, would otherwise never heal. Prepare stamps
+                // them and sets the flag only if there is something to heal.
+                if (last != 0L && !StampStore.IsPending(zdo)) continue;
                 // A world time behind the last pass (a restored save) counts as due.
-                if (last != 0L && now >= last && now - last < day) continue;
+                if (!dueNow && last != 0L && now >= last && now - last < day) continue;
                 Vector2s zone = ZoneSystem.GetZone(zdo.GetPosition());
                 if (!sleeping && !IsZoneIdle(zone, zdo)) continue;
                 if (sleeping && s_sent.TryGetValue(zdo.m_uid, out uint sent) && sent == zdo.DataRevision) continue;
@@ -489,7 +521,8 @@ namespace Weathering
             try
             {
                 s_outgoing.Clear();
-                Commit(writer, zdo, zdo.DataRevision, null, null, 0L, false);
+                // The last-pass time too, or a zone never seen would be picked up again every round.
+                Commit(writer, zdo, zdo.DataRevision, null, null, Math.Max(PassTime(), 1L), false);
                 Flush(writer);
             }
             catch (Exception)
@@ -516,7 +549,10 @@ namespace Weathering
             s_passWriter = 0L;
             s_outgoing.Clear();
             for (int s = 0; s < s_neighbours.Length; s++)
+            {
                 ClearNeighbour(s_neighbours[s]);
+                ClearNeighbour(s_diagonals[s]);
+            }
         }
 
         // Decodes the zone and its linked neighbours, builds the masks, fades the paint and loads the
@@ -530,25 +566,32 @@ namespace Weathering
             int count = pitch * pitch;
 
             uint revision = zdo.DataRevision;
-            if (!TerrainData.TryRead(zdo, pitch, out TerrainData data))
+            TerrainData data = s_passDataBuffer;
+            if (!data.Read(zdo, pitch))
             {
                 if (zdo.GetByteArray(ZDOVars.s_TCData) != null)
                     Jotunn.Logger.LogWarning($"Could not read the terrain data of zone {zone.x},{zone.y}; it will not heal until it is edited again.");
-                Commit(writer, zdo, revision, null, null, 0L, false);
+                // The last-pass time too, or a zone never seen would be decoded again every round.
+                Commit(writer, zdo, revision, null, null, Math.Max(now, 1L), false);
                 Flush(writer);
                 return;
             }
 
             int nowMinutes = (int)(now / 60);
-            int[] stamps = StampStore.Load(zdo, count);
+            if (s_passStampsBuffer.Length != count) s_passStampsBuffer = new int[count];
+            int[] stamps = StampStore.Load(zdo, s_passStampsBuffer);
             StampStore.EnsureStamped(data, stamps, nowMinutes);
             long last = StampStore.GetLast(zdo);
 
             if (last == 0L)
             {
-                // First sight: edits without a stamp start their delay now; the first heal is a day later.
-                // The zone was pending to get here, and stays so.
-                Commit(writer, zdo, revision, null, stamps, Math.Max(now, 1L), true);
+                // First sight: edits without a stamp (made before the mod was installed) start their
+                // delay now, and the first heal is a day later. A zone with nothing left to heal is
+                // only marked as seen.
+                bool any = false;
+                for (int i = 0; i < count && !any; i++)
+                    any = stamps[i] != 0;
+                Commit(writer, zdo, revision, null, any ? stamps : null, Math.Max(now, 1L), any);
                 Flush(writer);
                 return;
             }
@@ -568,7 +611,7 @@ namespace Weathering
             float erosionDays = 0f;
 
             BaseIndex.Collect(zone, s_circles);
-            LoadNeighbours(zone, pitch, nowMinutes, writer, sleeping);
+            LoadNeighbours(zone, data, pitch, nowMinutes, writer, sleeping);
 
             WorldGenerator worldGen = WorldGenerator.instance;
             Vector3 centre = ZoneSystem.GetZonePos(zone);
@@ -600,8 +643,22 @@ namespace Weathering
                     int side = BorderSide(x, y, width);
                     if (side == CornerSide)
                     {
-                        // A corner is shared by four zones; it never moves, so no copy can drift.
-                        held = true;
+                        // A corner is shared by four zones. It moves only when all four copies are
+                        // linked (the diagonal is linked only if both sides are) and all agree it may;
+                        // else it stays put, so no copy can drift.
+                        Neighbour diagonal = s_diagonals[CornerId(x, y, width)];
+                        if (!diagonal.Linked)
+                        {
+                            held = true;
+                        }
+                        else
+                        {
+                            int sideX = x == width ? 0 : 1;
+                            int sideY = y == width ? 2 : 3;
+                            if (OtherCopyHolds(s_neighbours[sideX], MirrorIndex(sideX, x, y, width, pitch), nowMinutes, delayMinutes, ref spotStamp, ref fresh)) held = true;
+                            if (OtherCopyHolds(s_neighbours[sideY], MirrorIndex(sideY, x, y, width, pitch), nowMinutes, delayMinutes, ref spotStamp, ref fresh)) held = true;
+                            if (OtherCopyHolds(diagonal, DiagonalIndex(x, y, width, pitch), nowMinutes, delayMinutes, ref spotStamp, ref fresh)) held = true;
+                        }
                     }
                     else if (side >= 0)
                     {
@@ -614,11 +671,7 @@ namespace Weathering
                         {
                             // The shared vertex moves only if both zones agree it may.
                             int j = MirrorIndex(side, x, y, width, pitch);
-                            int otherStamp = neighbour.Stamps[j];
-                            if (IsFresh(otherStamp, nowMinutes, delayMinutes)) fresh = held = true;
-                            // The shared vertex heals only for as long as both copies have been due.
-                            if (otherStamp > spotStamp) spotStamp = otherStamp;
-                            if (neighbour.Data.ModifiedPaint[j] && neighbour.Data.Paint[j].b > PavedThreshold) held = true;
+                            if (OtherCopyHolds(neighbour, j, nowMinutes, delayMinutes, ref spotStamp, ref fresh)) held = true;
                         }
                     }
 
@@ -698,13 +751,8 @@ namespace Weathering
             bool sleeping = IsSleepMode();
             for (int s = 0; s < s_neighbours.Length; s++)
             {
-                Neighbour neighbour = s_neighbours[s];
-                if (!neighbour.Linked) continue;
-                if (!IsCompiler(neighbour.Zdo) || neighbour.Zdo.DataRevision != neighbour.Revision) return;
-                // MirrorBorders may write it, so it must still be safe to write too.
-                Vector2s other = ZoneSystem.GetZone(neighbour.Zdo.GetPosition());
-                if (!sleeping && !IsZoneIdle(other, neighbour.Zdo)) return;
-                if (WriterOf(other, neighbour.Zdo) != s_passWriter) return;
+                if (!StillWritable(s_neighbours[s], sleeping)) return;
+                if (!StillWritable(s_diagonals[s], sleeping)) return;
             }
 
             TerrainData data = s_passData;
@@ -721,6 +769,17 @@ namespace Weathering
             MirrorBorders(data, stamps);
             // A peer gets the zone and its mirrored neighbours in one message, applied all or nothing.
             Flush(s_passWriter);
+        }
+
+        // A linked neighbour MirrorBorders may write: unchanged since it was read, and still safe to
+        // write by the pass's writer. An unlinked one is never written and always passes.
+        private static bool StillWritable(Neighbour neighbour, bool sleeping)
+        {
+            if (!neighbour.Linked) return true;
+            if (!IsCompiler(neighbour.Zdo) || neighbour.Zdo.DataRevision != neighbour.Revision) return false;
+            Vector2s other = ZoneSystem.GetZone(neighbour.Zdo.GetPosition());
+            if (!sleeping && !IsZoneIdle(other, neighbour.Zdo)) return false;
+            return WriterOf(other, neighbour.Zdo) == s_passWriter;
         }
 
         // Height results go back as level = clamped offset, smooth = 0, like vanilla's Level and Raise.
@@ -789,7 +848,8 @@ namespace Weathering
         }
 
         // Writes this zone's new border heights into each linked neighbour's copy of the same vertices,
-        // so both zones end with identical values. Paint is per zone and is not copied.
+        // so all zones end with identical values. Paint is per zone and is not copied. Each changed
+        // neighbour the server writes is healed next (s_dueNow), so its side of the border catches up.
         private static void MirrorBorders(TerrainData data, int[] stamps)
         {
             int width = s_width;
@@ -798,80 +858,130 @@ namespace Weathering
             {
                 Neighbour neighbour = s_neighbours[side];
                 if (!neighbour.Linked) continue;
-                TerrainData other = neighbour.Data;
-                bool changed = false;
-
                 for (int k = 1; k < width; k++)
                 {
                     BorderVertex(side, k, width, out int x, out int y);
                     int i = y * pitch + x;
                     if (s_frozen[i]) continue;
-                    int j = MirrorIndex(side, x, y, width, pitch);
-
-                    bool modified = data.ModifiedHeight[i];
-                    float level = modified ? data.LevelDelta[i] : 0f;
-                    float smooth = modified ? data.SmoothDelta[i] : 0f;
-                    if (other.ModifiedHeight[j] != modified || other.LevelDelta[j] != level || other.SmoothDelta[j] != smooth)
-                    {
-                        other.ModifiedHeight[j] = modified;
-                        other.LevelDelta[j] = level;
-                        other.SmoothDelta[j] = smooth;
-                        changed = true;
-                    }
-
-                    // Keep the neighbour's stamp in step, so its next pass neither freezes the vertex as
-                    // fresh nor stamps it as a new edit.
-                    int stamp = StampStore.NeedsStamp(modified, other.ModifiedPaint[j], other.Paint[j])
-                        ? (modified ? stamps[i] : neighbour.Stamps[j])
-                        : 0;
-                    if (neighbour.Stamps[j] != stamp)
-                    {
-                        neighbour.Stamps[j] = stamp;
-                        changed = true;
-                    }
+                    MirrorVertex(data, stamps, i, neighbour, MirrorIndex(side, x, y, width, pitch));
                 }
-
-                if (!changed) continue;
-                Commit(s_passWriter, neighbour.Zdo, neighbour.Revision, other, neighbour.Stamps, 0L, true);
             }
+
+            // A corner that moved goes to both side neighbours and the diagonal one.
+            for (int corner = 0; corner < s_diagonals.Length; corner++)
+            {
+                Neighbour diagonal = s_diagonals[corner];
+                if (!diagonal.Linked) continue;
+                int x = (corner & 1) == 0 ? width : 0;
+                int y = (corner & 2) == 0 ? width : 0;
+                int i = y * pitch + x;
+                if (s_frozen[i]) continue;
+                int sideX = x == width ? 0 : 1;
+                int sideY = y == width ? 2 : 3;
+                MirrorVertex(data, stamps, i, s_neighbours[sideX], MirrorIndex(sideX, x, y, width, pitch));
+                MirrorVertex(data, stamps, i, s_neighbours[sideY], MirrorIndex(sideY, x, y, width, pitch));
+                MirrorVertex(data, stamps, i, diagonal, DiagonalIndex(x, y, width, pitch));
+            }
+
+            for (int s = 0; s < s_neighbours.Length; s++)
+            {
+                CommitNeighbour(s_neighbours[s]);
+                CommitNeighbour(s_diagonals[s]);
+            }
+        }
+
+        // Copies vertex i of this zone into vertex j of a neighbour's copy, marking it changed.
+        private static void MirrorVertex(TerrainData data, int[] stamps, int i, Neighbour neighbour, int j)
+        {
+            TerrainData other = neighbour.Data;
+            bool modified = data.ModifiedHeight[i];
+            float level = modified ? data.LevelDelta[i] : 0f;
+            float smooth = modified ? data.SmoothDelta[i] : 0f;
+            if (other.ModifiedHeight[j] != modified || other.LevelDelta[j] != level || other.SmoothDelta[j] != smooth)
+            {
+                other.ModifiedHeight[j] = modified;
+                other.LevelDelta[j] = level;
+                other.SmoothDelta[j] = smooth;
+                neighbour.Changed = true;
+            }
+
+            // Keep the neighbour's stamp in step, so its next pass neither freezes the vertex as
+            // fresh nor stamps it as a new edit.
+            int stamp = StampStore.NeedsStamp(modified, other.ModifiedPaint[j], other.Paint[j])
+                ? (modified ? stamps[i] : neighbour.Stamps[j])
+                : 0;
+            if (neighbour.Stamps[j] != stamp)
+            {
+                neighbour.Stamps[j] = stamp;
+                neighbour.Changed = true;
+            }
+        }
+
+        private static void CommitNeighbour(Neighbour neighbour)
+        {
+            if (!neighbour.Linked || !neighbour.Changed) return;
+            Commit(s_passWriter, neighbour.Zdo, neighbour.Revision, neighbour.Data, neighbour.Stamps, 0L, true);
+            // A zone a peer writes is not changed here until that peer's write syncs back.
+            if (s_passWriter == ZDOMan.GetSessionID() && !s_dueNow.Contains(neighbour.Zdo)) s_dueNow.Add(neighbour.Zdo);
         }
 
         // Links each edge neighbour with saved data that the pass may write along with this zone:
         // an idle one outside sleep mode, one with the same writer in sleep mode. Other borders stay
-        // frozen for this pass.
-        private static void LoadNeighbours(Vector2s zone, int pitch, int nowMinutes, long writer, bool sleeping)
+        // frozen for this pass. A diagonal neighbour is linked only for a modified corner whose two
+        // side neighbours are linked; otherwise that corner stays frozen.
+        private static void LoadNeighbours(Vector2s zone, TerrainData data, int pitch, int nowMinutes, long writer, bool sleeping)
         {
             for (int side = 0; side < s_neighbours.Length; side++)
             {
-                Neighbour neighbour = s_neighbours[side];
-                ClearNeighbour(neighbour);
-                if (!s_sharedBorders) continue;
-
-                var other = new Vector2s(zone.x + s_sideDx[side], zone.y + s_sideDy[side]);
-                if (!s_byZone.TryGetValue(other, out ZDO zdo) || !IsCompiler(zdo)) continue;
-                if (!ZoneSystem.GetZone(zdo.GetPosition()).Equals(other)) continue;
-                if (sleeping ? WriterOf(other, zdo) != writer : !IsZoneIdle(other, zdo)) continue;
-                uint revision = zdo.DataRevision;
-                if (!TerrainData.TryRead(zdo, pitch, out TerrainData data)) continue;
-
-                int[] stamps = StampStore.Load(zdo, pitch * pitch);
-                // Unstamped edits there would be stamped "now" on its first sight; judge them the same way.
-                StampStore.EnsureStamped(data, stamps, nowMinutes);
-                neighbour.Zdo = zdo;
-                neighbour.Revision = revision;
-                neighbour.Data = data;
-                neighbour.Stamps = stamps;
-                neighbour.Linked = true;
+                ClearNeighbour(s_neighbours[side]);
+                ClearNeighbour(s_diagonals[side]);
             }
+            if (!s_sharedBorders) return;
+
+            for (int side = 0; side < s_neighbours.Length; side++)
+            {
+                var other = new Vector2s(zone.x + s_sideDx[side], zone.y + s_sideDy[side]);
+                Link(s_neighbours[side], other, pitch, nowMinutes, writer, sleeping);
+            }
+
+            int width = pitch - 1;
+            for (int corner = 0; corner < s_diagonals.Length; corner++)
+            {
+                int sideX = (corner & 1) == 0 ? 0 : 1;
+                int sideY = (corner & 2) == 0 ? 2 : 3;
+                if (!s_neighbours[sideX].Linked || !s_neighbours[sideY].Linked) continue;
+                int x = sideX == 0 ? width : 0;
+                int y = sideY == 2 ? width : 0;
+                if (!data.ModifiedHeight[y * pitch + x]) continue;
+                var other = new Vector2s(zone.x + s_sideDx[sideX], zone.y + s_sideDy[sideY]);
+                Link(s_diagonals[corner], other, pitch, nowMinutes, writer, sleeping);
+            }
+        }
+
+        private static void Link(Neighbour neighbour, Vector2s other, int pitch, int nowMinutes, long writer, bool sleeping)
+        {
+            if (!s_byZone.TryGetValue(other, out ZDO zdo) || !IsCompiler(zdo)) return;
+            if (!ZoneSystem.GetZone(zdo.GetPosition()).Equals(other)) return;
+            if (sleeping ? WriterOf(other, zdo) != writer : !IsZoneIdle(other, zdo)) return;
+            uint revision = zdo.DataRevision;
+            if (!neighbour.Data.Read(zdo, pitch)) return;
+
+            int count = pitch * pitch;
+            if (neighbour.Stamps.Length != count) neighbour.Stamps = new int[count];
+            StampStore.Load(zdo, neighbour.Stamps);
+            // Unstamped edits there would be stamped "now" on its first sight; judge them the same way.
+            StampStore.EnsureStamped(neighbour.Data, neighbour.Stamps, nowMinutes);
+            neighbour.Zdo = zdo;
+            neighbour.Revision = revision;
+            neighbour.Linked = true;
         }
 
         private static void ClearNeighbour(Neighbour neighbour)
         {
             neighbour.Linked = false;
+            neighbour.Changed = false;
             neighbour.Zdo = null;
             neighbour.Revision = 0;
-            neighbour.Data = null;
-            neighbour.Stamps = null;
         }
 
         private static void EnsureBuffers(int count)
@@ -886,6 +996,19 @@ namespace Weathering
 
         private static bool IsFresh(int stamp, int nowMinutes, float delayMinutes) =>
             stamp != 0 && nowMinutes - stamp < delayMinutes;
+
+        // Folds a linked neighbour's copy j of a shared vertex into this zone's view of it: the vertex
+        // heals only for as long as every copy has been due, and true means that copy holds it in
+        // place (fresh or paved there).
+        private static bool OtherCopyHolds(Neighbour neighbour, int j, int nowMinutes, float delayMinutes, ref int spotStamp, ref bool fresh)
+        {
+            bool holds = false;
+            int otherStamp = neighbour.Stamps[j];
+            if (IsFresh(otherStamp, nowMinutes, delayMinutes)) fresh = holds = true;
+            if (otherStamp > spotStamp) spotStamp = otherStamp;
+            if (neighbour.Data.ModifiedPaint[j] && neighbour.Data.Paint[j].b > PavedThreshold) holds = true;
+            return holds;
+        }
 
         // Days a spot has been past its own delay, but no more than the time since the zone's last pass
         // (anything earlier was healed then). A vertex without a stamp holds nothing to heal and simply
@@ -938,5 +1061,11 @@ namespace Weathering
             }
             return y * pitch + x;
         }
+
+        // Index into s_diagonals of a corner vertex: bit 0 set for x = 0, bit 1 set for y = 0.
+        private static int CornerId(int x, int y, int width) => (x == width ? 0 : 1) | (y == width ? 0 : 2);
+
+        // The same corner vertex's index in the diagonal neighbour: both coordinates flip.
+        private static int DiagonalIndex(int x, int y, int width, int pitch) => (width - y) * pitch + (width - x);
     }
 }

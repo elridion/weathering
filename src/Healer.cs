@@ -45,6 +45,10 @@ namespace Weathering
                 Color c = paint[i];
                 if (float.IsNaN(c.r) || float.IsNaN(c.g) || float.IsNaN(c.b)) continue;
                 if (c.b > PavedThreshold) continue;
+                // Only paint that fades here goes back to the generated mask. A vertex with no dirt or
+                // cultivated weight to begin with (the cultivator's grass paints 0,0,0) has nothing to
+                // fade; clearing it would swap the generated paint and vegetation alpha back in at once.
+                if (!(c.r > 0f) && !(c.g > 0f)) continue;
 
                 c.r = Mathf.Max(0f, c.r - amount);
                 c.g = Mathf.Max(0f, c.g - amount);

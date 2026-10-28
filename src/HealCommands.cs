@@ -151,17 +151,16 @@ namespace Weathering
                 string lastText = last == 0L
                     ? "never healed"
                     : $"last healed {((ZNet.instance.GetTimeSeconds() - last) / HealRunner.DayLength()).ToString("0.00", CultureInfo.InvariantCulture)} days ago";
-                Print($"Zone {zone.x},{zone.y}: pending {StampStore.IsPending(zdo)}, {lastText}, idle {DescribeIdle(zone, zdo)}.");
+                Print($"Zone {zone.x},{zone.y}: pending {StampStore.IsPending(zdo)}, {lastText}, idle {DescribeIdle(zone)}.");
             }
 
-            private static string DescribeIdle(Vector2s zone, ZDO zdo)
+            private static string DescribeIdle(Vector2s zone)
             {
                 int distance = HealRunner.NearestViewerDistance(zone);
                 int needed = HealRunner.IdleDistance();
                 string nearest = distance == int.MaxValue ? "no player is online" : $"the nearest player is {distance} zones away";
                 if (distance <= needed)
                     return $"no ({nearest}; healing needs everyone {DescribeIdleDistance()})";
-                if (!HealRunner.IsZoneIdle(zone, zdo)) return $"no (the zone is loaded on the server; {nearest})";
                 return $"yes ({nearest})";
             }
         }

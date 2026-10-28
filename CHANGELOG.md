@@ -6,7 +6,19 @@
   and felled trees there regrow, so you wake up to the change. A zone still heals at most once a day.
 - Each healing pass is spread over several frames, so big catch-ups (such as after a long sleep or
   a long absence) run more smoothly.
+- Earthworks from before the mod was installed now heal everywhere, not only in zones that were
+  edited again after installing.
+- The area around the world spawn now heals and regrows on dedicated servers too.
+- Pits and mounds across the corner where four zones meet now heal like any other instead of
+  staying at full depth there.
+- No more brief step along a zone border after the zone next to it healed.
+- Ground the cultivator turned back to grass no longer snaps back to its old look after the delay
+  (most visible in the Mistlands and Ashlands).
+- Regrown saplings sit on the ground as it is now, even if it was dug or raised since the tree fell.
+  A spot dug down into water gets no sapling.
+- Trees felled inside player bases no longer leave a regrowth spot behind.
 - Players on 0.1.x cannot play together with 0.2.0.
+
 ## 0.1.0
 
 - First release: dirt and cultivated ground outside player bases fades back to grass, and dug pits

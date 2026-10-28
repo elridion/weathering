@@ -35,9 +35,13 @@ namespace Weathering
 
         public static int[] Load(TerrainComp tc) => Load(GetZDO(tc), s_pitch(tc) * s_pitch(tc));
 
-        public static int[] Load(ZDO zdo, int count)
+        public static int[] Load(ZDO zdo, int count) => Load(zdo, new int[count]);
+
+        /// <summary>Loads the stamps into <paramref name="stamps"/>, all 0 when there are none; returns it.</summary>
+        public static int[] Load(ZDO zdo, int[] stamps)
         {
-            var stamps = new int[count];
+            int count = stamps.Length;
+            Array.Clear(stamps, 0, count);
             if (zdo == null) return stamps;
 
             byte[] compressed = zdo.GetByteArray(s_stampsKey);

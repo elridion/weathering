@@ -32,7 +32,8 @@ vanilla player base areas, and leaves vegetation for later.
   campfire, hearth and other stations; exact list comes from the prefabs) plus a margin never
   heals, and neither does anything near a Warden stone.
 - **No noticeable performance cost.** Zones carry a "needs healing" flag; only flagged zones are
-  ever examined. Healing runs on the server for idle zones, at most one pass per zone per in-game
+  ever examined, plus each zone once when the mod first sees it. Healing runs on the server for
+  idle zones, at most one pass per zone per in-game
   day, each spot catching up only the time since its own delay ran out (see When healing runs).
 
 ## Non-goals (v1)
@@ -118,13 +119,18 @@ nobody is near, without instantiating anything.
   written before that frame. The pass is dropped unwritten (the zone stays flagged and is retried)
   if the zone stops being idle, the world changes, or at the write the data revision of the zone or
   of a linked neighbour changed since it was read, or a linked neighbour is no longer idle. A zone is a candidate when its flag is set, it is idle, and its last pass is at
-  least one in-game day old. The first time a zone is seen it is only stamped (edits from before the
-  mod start their delay) and its last-pass time set; healing starts a day later.
+  least one in-game day old. A zone the mod has never seen (no last-pass time) is a candidate
+  without the flag, so earthworks from before install heal even where nobody edits again. The first
+  time a zone is seen it is only stamped (edits from before the mod start their delay), its last-pass
+  time set, and its flag set only if anything in it can heal; healing starts a day later. A zone
+  whose data cannot be read gets a last-pass time too, so it is not decoded again every round.
 - Idle: the zone's Chebyshev zone distance from every peer's reference position, and from the
   host's own when the server has a local player, is above Near + Far + 1 of the largest simulation
-  distance in use (8 zones with the game's maximum, Near 5 + Far 2), and the server has no instance
-  of its terrain compiler loaded. Nobody can have it loaded, so nothing re-saves over the result.
-  (A dedicated server's own reference position stays at the world origin and is ignored.)
+  distance in use (8 zones with the game's maximum, Near 5 + Far 2). No peer can have it loaded,
+  so nothing re-saves over the result. A dedicated server's own reference position stays at the
+  world origin and is ignored; the zones it keeps loaded there count as idle (no player is there to
+  edit them), and after writing such a zone the server makes its loaded `TerrainComp` reload at once
+  (`CheckLoad`). A host's own reference position always counts.
 - With `ErosionRate` 0, steep slopes alone do not keep a zone flagged.
 - A pass decodes the saved `TCData`, heals it (catch-up per spot: each vertex fades for the days
   since its own delay ran out, at most the time since the zone's last pass; erosion runs for the
@@ -182,7 +188,10 @@ A vertex is **frozen** (left as is and treated as a fixed boundary for erosion) 
 
 For each unfrozen vertex with modified paint: move dirt (r) and cultivated (g) toward 0 over
 `FadeDays` (default 2) after the delay, keeping alpha (the vegetation mask) untouched; when r and g
-reach 0 and b is 0, clear `m_modifiedPaint` for that vertex so the generated mask shows again.
+fade to 0 and b is 0, clear `m_modifiedPaint` for that vertex so the generated mask shows again.
+A vertex that held no r or g to begin with (the cultivator's grass, `PaintType.Reset`, paints
+0,0,0 and keeps alpha) is left as it is: there is nothing to fade, and clearing it would swap the
+generated paint and vegetation back in at once.
 Paved weight (b) is never reduced; a vertex with b above 0.5 (vanilla's own cleared threshold) is
 paved. Deep North vertices are skipped for paint (g holds snow depth there; verified in
 `PaintCleared`). Paint colours (verified): dirt (1,0,0,1), cultivated (0,1,0,1), paved (0,0,1,1).
@@ -219,8 +228,9 @@ A zone's flag is cleared when every non-frozen modified vertex is settled:
 Vertices still waiting out their delay keep the flag set (otherwise a zone checked before its
 edits are old enough would never heal). Vertices frozen by a base, paved paint, a piece or a zone
 border do not keep the flag set on their own. They are
-re-examined when an edit happens in the zone again. Consequence: removing a workbench does not
-start healing the ground it protected until something is edited in that zone. (Acceptable for v1;
+re-examined when an edit happens in the zone again. Consequence: removing a workbench or another
+piece does not start healing the ground it protected until something is edited in that zone (the
+store page says so). (Acceptable for v1;
 a cheap extra check on load could be added later.)
 
 ### Base areas
@@ -260,7 +270,12 @@ neighbour: a `TerrainOp` is sent to every heightmap it overlaps and each edits i
 server-side healing): border vertices are frozen in a pass, except when the neighbouring zone has
 saved terrain data and is idle too; then the border line is eroded with this zone and the resulting
 heights are written into the neighbour's copy, which is saved and flagged. Corners, shared by four
-zones, are always frozen.
+zones, are frozen unless the corner is modified and both side neighbours and the diagonal one are
+linked (their data loaded, idle or the same writer); then the corner moves only if no copy is fresh
+or paved and its value is written into all three. (A corner that never moves would keep a pit dug
+across it at full depth for good, a permanent talus cone around it.) A neighbour whose copy a pass
+changed is healed next, whenever its own last pass was, so its side of the border catches up
+instead of keeping a small step for up to a day.
 
 ### Multiplayer
 

@@ -66,6 +66,10 @@ These areas neither heal nor regrow trees:
 - Ground near fires and stations the world generated with a player-base area (some location
   campfires, for example) never heals either.
 - Terrain shaped by the world itself (locations, dungeons) and deep snow.
+- Ground the cultivator turned back to grass keeps the look you gave it.
+
+Removing a workbench or another piece does not free its ground right away: that ground starts to
+heal only after something in the same zone (64 m square) is dug, raised or painted again.
 
 ## Configuration
 

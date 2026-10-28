@@ -17,6 +17,9 @@ namespace Weathering
         // Scheduling.
         private const float SweepInterval = 10f;     // real seconds between the starts of two sweeps
         private const int InspectPerFrame = 256;     // ZDOs looked at per frame while searching for a due zone
+        // Real seconds between heal passes: a pass decodes up to 5 zones and runs up to 240 erosion
+        // iterations, too much to repeat every frame when many zones are due.
+        private const float HealInterval = 0.5f;
 
         // Used when the simulation distance cannot be read: the largest the game allows (Near 5, Far 2).
         private const int FallbackNear = 5;
@@ -56,6 +59,10 @@ namespace Weathering
         private static int s_scanIndex;
         private static float s_sweepStart = float.NegativeInfinity;
         private static int s_cursor;
+        private static float s_nextHealTime;
+
+        private static int s_idleDistanceFrame = -1;
+        private static int s_idleDistance;
 
         // Per-pass buffers, resized only when the vertex count changes.
         private static bool[] s_frozen = new bool[0];
@@ -104,8 +111,16 @@ namespace Weathering
             return !scene || !scene.FindInstance(zdo);
         }
 
-        /// <summary>Zone distance a viewer must be beyond for a zone to count as idle.</summary>
+        /// <summary>Zone distance a viewer must be beyond for a zone to count as idle. Cached per frame.</summary>
         internal static int IdleDistance()
+        {
+            if (s_idleDistanceFrame == Time.frameCount) return s_idleDistance;
+            s_idleDistanceFrame = Time.frameCount;
+            s_idleDistance = ComputeIdleDistance();
+            return s_idleDistance;
+        }
+
+        private static int ComputeIdleDistance()
         {
             int near = 0;
             int far = 0;
@@ -126,12 +141,16 @@ namespace Weathering
             return near + far + 1;
         }
 
-        /// <summary>Chebyshev zone distance to the nearest peer or the server's own reference position.</summary>
+        /// <summary>Chebyshev zone distance to the nearest peer, or to the host's own player.</summary>
         internal static int NearestViewerDistance(Vector2s zone)
         {
             ZNet net = ZNet.instance;
             if (!net) return int.MaxValue;
-            int best = ZoneDistance(zone, ZoneSystem.GetZone(net.GetReferencePosition()));
+            int best = int.MaxValue;
+            // A dedicated server has no player and its reference position stays at the world origin,
+            // which would keep the spawn area from ever healing. Whatever the server itself has
+            // loaded is caught by the FindInstance check instead.
+            if (Player.m_localPlayer) best = ZoneDistance(zone, ZoneSystem.GetZone(net.GetReferencePosition()));
             foreach (ZNetPeer peer in net.GetPeers())
                 best = Math.Min(best, ZoneDistance(zone, ZoneSystem.GetZone(peer.GetRefPos())));
             return best;
@@ -206,6 +225,7 @@ namespace Weathering
             s_scanIndex = 0;
             s_sweepStart = float.NegativeInfinity;
             s_cursor = 0;
+            s_nextHealTime = 0f;
         }
 
         private static void Sweep(ZDOMan zdoMan)
@@ -238,7 +258,7 @@ namespace Weathering
 
         private static void HealNext(ZNet net)
         {
-            if (s_cursor >= s_queue.Count) return;
+            if (s_cursor >= s_queue.Count || Time.realtimeSinceStartup < s_nextHealTime) return;
             long now = (long)net.GetTimeSeconds();
             long day = DayLength();
 
@@ -253,6 +273,7 @@ namespace Weathering
                 if (!IsZoneIdle(zone, zdo)) continue;
 
                 Process(zdo, zone, now, day);
+                s_nextHealTime = Time.realtimeSinceStartup + HealInterval;
                 return;
             }
         }
@@ -388,18 +409,23 @@ namespace Weathering
 
             int iterations = Mathf.Min(Mathf.RoundToInt(elapsedDays * Healer.IterationsPerDay * WeatheringPlugin.ErosionRate.Value),
                 Healer.MaxIterationsPerPass);
-            bool erosionPending = Healer.Erode(offset, frozen, pitch, Mathf.Max(iterations, 0), Healer.DiffusionRate);
+            iterations = Mathf.Max(iterations, 0);
+            // With erosion off (or too weak for a single iteration) steep pairs would otherwise keep
+            // the zone flagged and rewritten every day forever.
+            bool erosionPending = Healer.Erode(offset, frozen, pitch, iterations, Healer.DiffusionRate) && iterations > 0;
             Healer.ZeroTiny(offset, data.ModifiedHeight, frozen);
 
             WriteBackHeights(data, stamps, nowMinutes, delayMinutes);
             ClearStaleStamps(data, stamps);
-            MirrorBorders(data, stamps);
 
+            // This zone first: if a neighbour write fails, the zone itself is already consistent.
             Claim(zdo);
             data.Write(zdo);
             StampStore.Save(zdo, stamps);
             StampStore.SetLast(zdo, now);
             StampStore.SetPending(zdo, paintPending || erosionPending || waiting);
+
+            MirrorBorders(data, stamps);
 
             for (int s = 0; s < s_neighbours.Length; s++)
                 ClearNeighbour(s_neighbours[s]);

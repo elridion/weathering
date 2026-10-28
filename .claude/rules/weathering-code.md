@@ -18,7 +18,8 @@ Adds to the workspace-wide `code-style.md` and `valheim-modding.md` in `../.clau
 - One in-game day is `EnvMan.instance.m_dayLengthSec` seconds (default 1200). Time is
   `ZNet.instance.GetTimeSeconds()`.
 - Healing runs only on the server, on saved `TCData` of zones that pass `HealRunner.IsZoneIdle`
-  (no peer and not the host within Near + Far + 1 zones, no instance loaded on the server). Never
+  (no peer and not the host's player within Near + Far + 1 zones, no instance loaded on the
+  server; a dedicated server's own reference position is the origin and is ignored). Never
   write terrain data of a zone someone may have loaded: a loaded `TerrainComp` re-saves its whole
   array over it, and clients drop updates whose data revision is not newer than theirs. Claim the
   ZDO with `zdo.SetOwner(ZDOMan.GetSessionID())` before writing and leave ownership to vanilla.

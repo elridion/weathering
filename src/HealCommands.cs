@@ -39,7 +39,8 @@ namespace Weathering
             public override string Name => "weathering_age";
 
             public override string Help =>
-                "<days> - make terrain edits within 3 zones of you that many in-game days older; walk away to let them heal (server or host)";
+                "<days> - test command: make terrain edits within 3 zones of you that many in-game days older; walk away to let them heal " +
+                "(server or host; on a host it takes ownership of those zones)";
 
             public override bool IsCheat => true;
 

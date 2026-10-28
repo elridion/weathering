@@ -111,14 +111,16 @@ nobody is near, without instantiating anything.
 - Only on the server (`ZNet.IsServer()`, so a dedicated server or the host), once the base index is
   built.
 - The server lists the terrain compiler ZDOs incrementally (`GetAllZDOsWithPrefabIterative`, a slice
-  of sectors per frame; a new sweep starts at most every 10 s) and looks at no more than one zone
-  per frame. A zone is a candidate when its flag is set, it is idle, and its last pass is at least
-  one in-game day old. The first time a zone is seen it is only stamped (edits from before the mod
-  start their delay) and its last-pass time set; healing starts a day later.
-- Idle: the zone's Chebyshev zone distance from every peer's reference position and from the
-  server's own is above Near + Far + 1 of the largest simulation distance in use (8 zones with the
-  game's maximum, Near 5 + Far 2), and the server has no instance of its terrain compiler loaded.
-  Nobody can have it loaded, so nothing re-saves over the result.
+  of sectors per frame; a new sweep starts at most every 10 s) and processes at most one zone every
+  0.5 s real time. A zone is a candidate when its flag is set, it is idle, and its last pass is at
+  least one in-game day old. The first time a zone is seen it is only stamped (edits from before the
+  mod start their delay) and its last-pass time set; healing starts a day later.
+- Idle: the zone's Chebyshev zone distance from every peer's reference position, and from the
+  host's own when the server has a local player, is above Near + Far + 1 of the largest simulation
+  distance in use (8 zones with the game's maximum, Near 5 + Far 2), and the server has no instance
+  of its terrain compiler loaded. Nobody can have it loaded, so nothing re-saves over the result.
+  (A dedicated server's own reference position stays at the world origin and is ignored.)
+- With `ErosionRate` 0, steep slopes alone do not keep a zone flagged.
 - A pass decodes the saved `TCData`, heals it (catch-up for the whole elapsed time, capped), and
   writes it back in vanilla's layout after claiming the ZDO for the server, like vanilla server code
   does. Ownership is left to vanilla's release loop. A zone whose data cannot be read logs one

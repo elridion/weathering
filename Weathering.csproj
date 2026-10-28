@@ -29,7 +29,7 @@
   <!-- Thunderstore/Hexium package: dotnet build -c Release -t:Package -->
   <PropertyGroup>
     <PackageDescription>Dug pits, churned dirt and abandoned fields outside your base slowly weather back into the land.</PackageDescription>
-    <PackageWebsite>https://discord.gg/TsJGEmKj6V</PackageWebsite>
+    <PackageWebsite>https://discord.gg/8t4DpS8mJt</PackageWebsite>
     <PackageDependencies>"ValheimModding-Jotunn-2.30.2"</PackageDependencies>
     <PackageStagingDir>$(BaseIntermediateOutputPath)package\</PackageStagingDir>
     <PackageOutputDir>$(MSBuildProjectDirectory)\dist\</PackageOutputDir>

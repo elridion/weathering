@@ -339,7 +339,7 @@ namespace Weathering
             bool[] deepNorth = s_deepNorth;
             float[] offset = s_offset;
             float[] fadeAmount = s_fadeAmount;
-            // The most days any unfrozen height edit has been past its delay since the last pass; a zone
+            // The most days any due height edit has been past its delay since the last pass; a zone
             // whose edits only just came due gets that much erosion, not the whole time since the last pass.
             float erosionDays = 0f;
 
@@ -414,7 +414,9 @@ namespace Weathering
 
                     float spotDays = DueDays(spotStamp, elapsedDays, nowMinutes, delayMinutes, dayMinutes);
                     fadeAmount[i] = fadeDays > 0f ? spotDays / fadeDays : 0f;
-                    if (!held && modifiedHeight && spotDays > erosionDays) erosionDays = spotDays;
+                    // Frozen but due height edits count too (a paved edge, a base rim, a zone border):
+                    // they stay put but their steep edge still erodes the unfrozen ground next to them.
+                    if (!fresh && modifiedHeight && spotDays > erosionDays) erosionDays = spotDays;
                 }
             }
 

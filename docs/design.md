@@ -123,7 +123,8 @@ nobody is near, without instantiating anything.
 - With `ErosionRate` 0, steep slopes alone do not keep a zone flagged.
 - A pass decodes the saved `TCData`, heals it (catch-up per spot: each vertex fades for the days
   since its own delay ran out, at most the time since the zone's last pass; erosion runs for the
-  most such days among the unfrozen height edits, capped at 240 iterations), and
+  most such days among the height edits past their delay, frozen ones included since their edges
+  still erode the ground next to them, capped at 240 iterations), and
   writes it back in vanilla's layout after claiming the ZDO for the server, like vanilla server code
   does. Ownership is left to vanilla's release loop. A zone whose data cannot be read logs one
   warning and loses its flag.

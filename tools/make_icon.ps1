@@ -28,21 +28,31 @@ using System; using System.Drawing; using System.Drawing.Drawing2D; using System
 public static class IconPaint {
     // Draws the white glyph as amber: a vertical gradient through the glyph's alpha, over a dark
     // outline grown from the same alpha.
-    public static Bitmap Glyph(Bitmap src, int size, double fill, int outline) {
+    // The glyph's visible bounding box is scaled to span 2 * clipR px and centred, then everything
+    // outside a circle of radius clipR (just inside the plate's rim) is cut with an antialiased edge,
+    // so the glyph's corners are rounded off by the circle.
+    public static Bitmap Glyph(Bitmap src, int size, double clipR, int outline) {
         var dst = new Bitmap(size, size, PixelFormat.Format32bppArgb);
-        int inner = (int)Math.Round(size * fill);
-        int off = (size - inner) / 2;
+        int x0 = src.Width, y0 = src.Height, x1 = -1, y1 = -1;
+        for (int y = 0; y < src.Height; y++)
+            for (int x = 0; x < src.Width; x++)
+                if (src.GetPixel(x, y).A > 16) { x0 = Math.Min(x0, x); x1 = Math.Max(x1, x + 1); y0 = Math.Min(y0, y); y1 = Math.Max(y1, y + 1); }
+        double cx = (x0 + x1) / 2.0, cy = (y0 + y1) / 2.0;
+        double s = 2 * clipR / Math.Max(x1 - x0, y1 - y0);
         var mask = new Bitmap(size, size, PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(mask)) {
             g.Clear(Color.Transparent);
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            g.DrawImage(src, new Rectangle(off, off, inner, inner));
+            g.DrawImage(src, new RectangleF((float)(size / 2.0 - cx * s), (float)(size / 2.0 - cy * s), (float)(src.Width * s), (float)(src.Height * s)));
         }
         var a = new byte[size * size];
         for (int y = 0; y < size; y++)
-            for (int x = 0; x < size; x++)
-                a[y * size + x] = mask.GetPixel(x, y).A;
+            for (int x = 0; x < size; x++) {
+                double d = Math.Sqrt((x + 0.5 - size / 2.0) * (x + 0.5 - size / 2.0) + (y + 0.5 - size / 2.0) * (y + 0.5 - size / 2.0));
+                double cover = Math.Max(0, Math.Min(1, clipR - outline + 0.5 - d)); // art stops one outline width inside clipR
+                a[y * size + x] = (byte)Math.Round(mask.GetPixel(x, y).A * cover);
+            }
         mask.Dispose();
 
         Color top = Color.FromArgb(255, 206, 110), bottom = Color.FromArgb(214, 132, 40), edge = Color.FromArgb(22, 18, 14);
@@ -62,7 +72,9 @@ public static class IconPaint {
                 int r = (int)Math.Round(edge.R * (1 - k) + (top.R * (1 - t) + bottom.R * t) * k);
                 int gg = (int)Math.Round(edge.G * (1 - k) + (top.G * (1 - t) + bottom.G * t) * k);
                 int b = (int)Math.Round(edge.B * (1 - k) + (top.B * (1 - t) + bottom.B * t) * k);
-                dst.SetPixel(x, y, Color.FromArgb(Math.Max(ring, ga), r, gg, b));
+                double dd = Math.Sqrt((x + 0.5 - size / 2.0) * (x + 0.5 - size / 2.0) + (y + 0.5 - size / 2.0) * (y + 0.5 - size / 2.0));
+                double edgeCover = Math.Max(0, Math.Min(1, clipR + 0.5 - dd));
+                dst.SetPixel(x, y, Color.FromArgb((int)Math.Round(Math.Max(ring, ga) * edgeCover), r, gg, b));
             }
         }
         return dst;
@@ -100,7 +112,8 @@ try {
     $zip.Dispose()
 }
 
-$glyph = [IconPaint]::Glyph($src, 256, 0.62, 6)
+# The rim's inner edge is 115 px from the centre; clip 5 px inside it.
+$glyph = [IconPaint]::Glyph($src, 256, 110, 6)
 $mod = [IconPaint]::ModIcon($glyph, 256)
 $mod.Save((Join-Path (Get-Location) $Out), [System.Drawing.Imaging.ImageFormat]::Png)
 

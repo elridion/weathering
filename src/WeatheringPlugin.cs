@@ -1,6 +1,7 @@
 ﻿using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
+using Jotunn.Managers;
 using Jotunn.Utils;
 
 namespace Weathering
@@ -50,6 +51,9 @@ namespace Weathering
                 new ConfigDescription("Extra prefabs that count as a base, as a comma-separated list of prefab:radius in meters " +
                     "(for example piece_example:30). Use it for modded pieces that vanilla does not treat as a base.",
                     null, adminOnly));
+
+            // Fires on every ZNetScene load, after Jotunn added modded prefabs, so their base areas count.
+            PrefabManager.OnPrefabsRegistered += BaseIndex.Build;
 
             _harmony = new Harmony(PluginGuid);
             _harmony.PatchAll(typeof(WeatheringPlugin).Assembly);

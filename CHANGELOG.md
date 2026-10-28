@@ -17,6 +17,8 @@
 - Regrown saplings sit on the ground as it is now, even if it was dug or raised since the tree fell.
   A spot dug down into water gets no sapling.
 - Trees felled inside player bases no longer leave a regrowth spot behind.
+- Regrown saplings always grow into their tree, even in dense forest, under overhangs or in the
+  mountains.
 - Players on 0.1.x cannot play together with 0.2.0.
 
 ## 0.1.0

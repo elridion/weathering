@@ -23,6 +23,7 @@ Stack, build, verification and git workflow are shared by all mods: see `../CLAU
   registers the invisible marker prefab, maps trees to their saplings and writes the site keys.
   `src/RegrowthRunner.cs` sweeps the sites on the server and, once due and idle, drops sites inside
   protected circles or without a sapling, waits on a standing stump, else creates the sapling ZDO.
+  `src/PlantPatches.cs` keeps those saplings healthy whatever vanilla's growth checks say.
 - `tools/make_icon.ps1` generates `package/icon.png`. `docs/` design notes. `hexium.json` Hexium
   listing metadata.
 - The mod has no player-facing strings: no translations, no `AddLocalizations`.
@@ -34,7 +35,8 @@ Stack, build, verification and git workflow are shared by all mods: see `../CLAU
   `weathering_last` (long, world time in whole seconds of the last heal pass), the regrowth marker
   prefab `weathering_regrowth_site` with ZDO keys `weathering_tree` (int, felled tree prefab hash),
   `weathering_stump` (int, stump prefab hash, 0 if none) and `weathering_felled` (int, StampStore
-  minutes, at least 1), the routed RPC `Weathering_ApplyHeal` (one `ZPackage`), and config
+  minutes, at least 1), the ZDO key `weathering_regrown` (bool, on saplings the mod planted), the
+  routed RPC `Weathering_ApplyHeal` (one `ZPackage`), and config
   section/key names (renaming a key resets users' settings). It also reads Warden's
   `spawnward_radius` (float) and prefab `piece_spawnward`; those belong to Warden.
 - **Removing the mod must leave a valid world.** Only ever write vanilla-valid `TerrainComp` data.

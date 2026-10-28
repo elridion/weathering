@@ -307,7 +307,19 @@ Regrowth happens on the server while nobody is near the zone.
   circle (base, Warden stone, piece) or whose tree no longer maps to a sapling is destroyed; one with
   its stump within 1 m is kept and rechecked an in-game day later; otherwise the sapling ZDO is
   created the way `ZNetView.Awake` creates one (persistent, type, distant flags from the sapling's
-  `ZNetView`, rotation, `plantTime` now) and the marker is destroyed after claiming it.
+  `ZNetView`, rotation, `plantTime` now, `weathering_regrown` true) and the marker is destroyed
+  after claiming it.
+- Vanilla `Plant.UpdateHealth` judges every sapling like a player-planted one: biome, too hot
+  (Ashlands), too cold (Mountain, Deep North), roof (ray up), grow space (overlap sphere of
+  `m_growRadius` against trunks, rocks, logs, pieces and healthy plants). Natural forests are denser
+  than that allows, so many regrown saplings would stay unhealthy for ever (or destroy themselves
+  where `m_destroyIfCantGrow` is set). A postfix on `UpdateHealth` (`PlantPatches`) sets the status
+  back to healthy for any plant whose ZDO has `weathering_regrown`, whatever the reason: the tree
+  stood on that very spot, and the site was already dropped if it lies in a protected circle. It
+  runs on every peer with the sapling loaded, so hover text and model show healthy too, and the
+  owner's `Plant.Grow` grows it into the tree as usual. Other plants' grow-space check sees it as a
+  healthy plant and is blocked by it, as by any healthy sapling. Without the mod such a sapling is
+  an ordinary one again and may stay unhealthy; the world stays valid.
 
 ## Configuration (initial)
 

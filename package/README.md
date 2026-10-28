@@ -19,7 +19,8 @@ recover on its own, the way you would expect nature to.
   default), and digging next to an old pit does not freeze the old pit. Sleeping counts as time
   passing.
 - **Felled trees** regrow: 3 in-game days (the default) after a tree was felled, its sapling appears
-  where it stood and grows like one you planted. A stump left standing keeps its tree from
+  where it stood and grows into its tree like one you planted, but it always grows: the spot is
+  never too crowded, too shaded or too cold, since its tree already stood there. A stump left standing keeps its tree from
   regrowing until the stump is removed. Trees with no sapling (such as autumn birches) do not
   regrow, and rocks and ore never come back.
 - Healing happens on the server (or the host) while no player is nearby, so you never watch the
@@ -52,7 +53,9 @@ On the server or host (in single player, your own game). Handy for testing:
 First run `weathering_clear_sites` on the server or host. Felled trees remember their spot with an
 invisible marker; without the mod, players on a dedicated server get a "Missing prefab hash" log
 line for every marker near them, every frame. Healed terrain stays as it is and its data stays
-valid for vanilla Valheim, but nothing heals any more.
+valid for vanilla Valheim, but nothing heals any more. A sapling the mod planted that is still
+growing becomes an ordinary sapling: where the game finds it too crowded, shaded or cold, it stays
+unhealthy and does not grow.
 
 ## What never heals
 

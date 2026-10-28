@@ -396,6 +396,8 @@ namespace Weathering
             // Plant counts growth from this time; left at 0 it would start on first load instead.
             // Ticks of world time, as ZNet.GetTime gives them.
             zdo.Set(ZDOVars.s_plantTime, plantedSeconds * TimeSpan.TicksPerSecond);
+            // Exempts it from vanilla's growth checks: the felled tree stood on this very spot.
+            zdo.Set(RegrowthSites.RegrownKey, true);
         }
 
         private static void DestroySite(ZDO site)

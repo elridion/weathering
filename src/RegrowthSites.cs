@@ -21,6 +21,8 @@ namespace Weathering
         public static readonly int TreeKey = "weathering_tree".GetStableHashCode();
         public static readonly int StumpKey = "weathering_stump".GetStableHashCode();
         public static readonly int FelledKey = "weathering_felled".GetStableHashCode();
+        // On a sapling the mod planted: PlantPatches keeps it healthy.
+        public static readonly int RegrownKey = "weathering_regrown".GetStableHashCode();
 
         // Grown prefab hash -> sapling prefab hash.
         private static readonly Dictionary<int, int> s_saplings = new Dictionary<int, int>();

@@ -1,5 +1,12 @@
-# Changelog
+﻿# Changelog
 
+## 0.2.0
+
+- Overnight healing: while everyone sleeps, spots past their delay near the sleeping players heal
+  and felled trees there regrow, so you wake up to the change. A zone still heals at most once a day.
+- Each healing pass is spread over several frames, so big catch-ups (such as after a long sleep or
+  a long absence) run more smoothly.
+- Players on 0.1.x cannot play together with 0.2.0.
 ## 0.1.0
 
 - First release: dirt and cultivated ground outside player bases fades back to grass, and dug pits
@@ -11,7 +18,5 @@
   Trees with no sapling (such as autumn birches) do not regrow.
 - Ground heals on the server (or host) while no player is nearby, so you find it weathered when
   you come back. Test commands for the server or host: `weathering_age` and `weathering_status`.
-- Overnight healing: while everyone sleeps, spots past their delay near the sleeping players heal
-  and felled trees there regrow, so you wake up to the change. A zone still heals at most once a day.
 - `weathering_clear_sites` removes every felled-tree regrowth spot; run it on the server or host
   before removing the mod.

@@ -17,7 +17,7 @@ namespace Weathering
     {
         public const string PluginGuid = "elridion.weathering";
         public const string PluginName = "Weathering";
-        public const string PluginVersion = "0.1.0";
+        public const string PluginVersion = "0.2.0";
 
         public static ConfigEntry<float> DelayDays;
         public static ConfigEntry<float> FadeDays;

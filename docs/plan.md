@@ -189,6 +189,8 @@ ZNetScene.cs, ZDOVars.cs). This folder is temporary; if it is gone, re-decompile
 
 ### Task 6: Heal runner
 
+Revised: see design.md 'When healing runs'.
+
 **Files:**
 - Create: `src/HealRunner.cs` (MonoBehaviour added to the plugin's GameObject in `Awake`)
 

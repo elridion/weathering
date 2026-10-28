@@ -55,6 +55,10 @@ namespace Weathering
             // Fires on every ZNetScene load, after Jotunn added modded prefabs, so their base areas count.
             PrefabManager.OnPrefabsRegistered += BaseIndex.Build;
 
+            // Does nothing on clients; on the server it heals flagged zones nobody is near.
+            gameObject.AddComponent<HealRunner>();
+            HealCommands.Register();
+
             _harmony = new Harmony(PluginGuid);
             _harmony.PatchAll(typeof(WeatheringPlugin).Assembly);
         }

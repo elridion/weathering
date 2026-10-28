@@ -5,15 +5,18 @@ using UnityEngine;
 namespace Weathering
 {
     /// <summary>
-    /// Keeps the per-vertex edit times and the "needs healing" flag on a TerrainComp's own ZDO.
-    /// Stamps are whole in-game minutes since world time 0, with 0 meaning "no stamp", so a stamp
-    /// taken in the first minute of a world is written as 1 instead of being lost.
+    /// Keeps the per-vertex edit times, the "needs healing" flag and the time of the last heal pass on
+    /// a terrain compiler's own ZDO. Stamps are whole in-game minutes since world time 0, with 0
+    /// meaning "no stamp", so a stamp taken in the first minute of a world is written as 1 instead of
+    /// being lost. The TerrainComp overloads write only on the owner; the ZDO overloads never check
+    /// ownership, because the heal runner claims the ZDO before it writes.
     /// </summary>
     internal static class StampStore
     {
         // Persisted keys: never rename once shipped.
         private static readonly int s_stampsKey = "weathering_stamps".GetStableHashCode();
         private static readonly int s_pendingKey = "weathering_pending".GetStableHashCode();
+        private static readonly int s_lastKey = "weathering_last".GetStableHashCode();
 
         internal static readonly AccessTools.FieldRef<TerrainComp, ZNetView> s_nview =
             AccessTools.FieldRefAccess<TerrainComp, ZNetView>("m_nview");
@@ -30,11 +33,11 @@ namespace Weathering
         // so it is resized whenever the vertex count changes.
         private static byte[] s_saveBuffer = new byte[0];
 
-        public static int[] Load(TerrainComp tc)
+        public static int[] Load(TerrainComp tc) => Load(GetZDO(tc), s_pitch(tc) * s_pitch(tc));
+
+        public static int[] Load(ZDO zdo, int count)
         {
-            int count = s_pitch(tc) * s_pitch(tc);
             var stamps = new int[count];
-            ZDO zdo = GetZDO(tc);
             if (zdo == null) return stamps;
 
             byte[] compressed = zdo.GetByteArray(s_stampsKey);
@@ -59,9 +62,12 @@ namespace Weathering
         public static void Save(TerrainComp tc, int[] stamps)
         {
             if (!tc.IsOwner()) return;
-            ZDO zdo = GetZDO(tc);
-            if (zdo == null) return;
+            Save(GetZDO(tc), stamps);
+        }
 
+        public static void Save(ZDO zdo, int[] stamps)
+        {
+            if (zdo == null) return;
             int length = stamps.Length * sizeof(int);
             if (s_saveBuffer.Length != length) s_saveBuffer = new byte[length];
             Buffer.BlockCopy(stamps, 0, s_saveBuffer, 0, length);
@@ -75,33 +81,56 @@ namespace Weathering
             Color[] paintMask = s_paintMask(tc);
             if (modifiedHeight == null || modifiedPaint == null || paintMask == null) return;
 
-            int stamp = Math.Max(now, 1);
-            int count = Math.Min(stamps.Length, modifiedHeight.Length);
-            for (int i = 0; i < count; i++)
-            {
-                if (stamps[i] != 0) continue;
-                // Edits made before the mod was installed have no stamp; they start their delay now.
-                if (modifiedHeight[i] || (modifiedPaint[i] && (paintMask[i].r > 0f || paintMask[i].g > 0f)))
-                    stamps[i] = stamp;
-            }
+            EnsureStamped(modifiedHeight, modifiedPaint, paintMask, stamps, now);
             SetPending(tc, true);
         }
 
-        public static bool IsPending(TerrainComp tc)
-        {
-            ZDO zdo = GetZDO(tc);
-            return zdo != null && zdo.GetBool(s_pendingKey);
-        }
+        /// <summary>Same as the TerrainComp overload, on decoded data; the caller sets the pending flag.</summary>
+        public static void EnsureStamped(TerrainData data, int[] stamps, int now) =>
+            EnsureStamped(data.ModifiedHeight, data.ModifiedPaint, data.Paint, stamps, now);
+
+        /// <summary>True when a vertex holds an edit that can still heal and so needs a stamp.</summary>
+        public static bool NeedsStamp(bool modifiedHeight, bool modifiedPaint, Color paint) =>
+            modifiedHeight || (modifiedPaint && (paint.r > 0f || paint.g > 0f));
+
+        public static bool IsPending(TerrainComp tc) => IsPending(GetZDO(tc));
+
+        public static bool IsPending(ZDO zdo) => zdo != null && zdo.GetBool(s_pendingKey);
 
         public static void SetPending(TerrainComp tc, bool value)
         {
             if (!tc.IsOwner()) return;
-            ZDO zdo = GetZDO(tc);
+            SetPending(GetZDO(tc), value);
+        }
+
+        public static void SetPending(ZDO zdo, bool value)
+        {
             if (zdo == null) return;
             zdo.Set(s_pendingKey, value);
         }
 
+        /// <summary>World time in whole seconds of the zone's last heal pass; 0 when never seen.</summary>
+        public static long GetLast(ZDO zdo) => zdo == null ? 0L : zdo.GetLong(s_lastKey);
+
+        public static void SetLast(ZDO zdo, long seconds)
+        {
+            if (zdo == null) return;
+            zdo.Set(s_lastKey, seconds);
+        }
+
         public static int Now() => (int)(ZNet.instance.GetTimeSeconds() / 60);
+
+        private static void EnsureStamped(bool[] modifiedHeight, bool[] modifiedPaint, Color[] paint, int[] stamps, int now)
+        {
+            int stamp = Math.Max(now, 1);
+            int count = Math.Min(stamps.Length, Math.Min(modifiedHeight.Length, Math.Min(modifiedPaint.Length, paint.Length)));
+            for (int i = 0; i < count; i++)
+            {
+                if (stamps[i] != 0) continue;
+                // Edits made before the mod was installed have no stamp; they start their delay now.
+                if (NeedsStamp(modifiedHeight[i], modifiedPaint[i], paint[i])) stamps[i] = stamp;
+            }
+        }
 
         private static ZDO GetZDO(TerrainComp tc)
         {

@@ -17,6 +17,17 @@ recover on its own, the way you would expect nature to.
   to its original shape.
 - Every spot has its own timer. Nothing changes until it was last edited 3 in-game days ago, and
   digging next to an old pit does not freeze the old pit. Sleeping counts as time passing.
+- Healing happens on the server (or the host) while no player is nearby, so you never watch the
+  ground move: you find it weathered when you come back.
+
+## Console commands
+
+On the server or host (in single player, your own game). Handy for testing:
+
+- `weathering_age <days>` (needs `devcommands`): makes terrain edits within 3 zones of you that
+  many in-game days older. Walk away to let them heal; the command says how far.
+- `weathering_status`: how many zones wait to heal, and whether the zone you stand in is waiting,
+  when it last healed and whether it can heal right now.
 
 ## What never heals
 

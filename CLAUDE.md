@@ -7,8 +7,16 @@ Stack, build, verification and git workflow are shared by all mods: see `../CLAU
 
 ## Where things are
 
-- `src/WeatheringPlugin.cs` binds the config and applies the Harmony patches. Later files (stamp
-  store, terrain patches, base index, healer, heal runner) are listed in `docs/plan.md`.
+- `src/WeatheringPlugin.cs` binds the config, applies the Harmony patches, adds the heal runner and
+  registers the console commands.
+- `src/TerrainPatches.cs` stamps edited vertices on the zone owner; `src/StampStore.cs` keeps the
+  stamps, pending flag and last-pass time on the terrain compiler ZDO.
+- `src/BaseIndex.cs` finds bases, Warden stones and pieces around a zone from saved ZDOs.
+- `src/Healer.cs` is the pure paint-fade and erosion math.
+- `src/TerrainData.cs` decodes and encodes a zone's saved `TCData` without a `TerrainComp`.
+- `src/HealRunner.cs` heals flagged zones on the server while nobody is near (`IsZoneIdle` is the
+  shared "safe to write this zone" test); `src/HealCommands.cs` has `weathering_age` and
+  `weathering_status`.
 - `tools/make_icon.ps1` generates `package/icon.png`. `docs/` design notes. `hexium.json` Hexium
   listing metadata.
 - The mod has no player-facing strings: no translations, no `AddLocalizations`.

@@ -102,14 +102,31 @@ bases will weather and that removing the mod does not bring them back.
 
 ### When healing runs
 
-- Only the zone owner (`ZNetView.IsOwner()`, so the server or the client owning the zone) heals.
-- On zone load / `TerrainComp` initialisation, if the flag is set: compute elapsed time since the
-  zone's last heal pass, apply that many steps (capped), save once, rebuild once.
-- While a zone stays loaded: re-check flagged zones at most once per in-game day, with a global
-  budget (one zone per frame or less).
+Revised during implementation (it first said "on the zone owner, when a zone loads"): a client only
+holds the ZDOs synced near it, so it could miss a base or Warden stone up to 180 m away, and writing
+a zone while a client has it loaded races with that client's own `TerrainComp.Save`, which re-saves
+the whole array. Healing therefore runs on the server only, on the saved terrain data of zones
+nobody is near, without instantiating anything.
+
+- Only on the server (`ZNet.IsServer()`, so a dedicated server or the host), once the base index is
+  built.
+- The server lists the terrain compiler ZDOs incrementally (`GetAllZDOsWithPrefabIterative`, a slice
+  of sectors per frame; a new sweep starts at most every 10 s) and looks at no more than one zone
+  per frame. A zone is a candidate when its flag is set, it is idle, and its last pass is at least
+  one in-game day old. The first time a zone is seen it is only stamped (edits from before the mod
+  start their delay) and its last-pass time set; healing starts a day later.
+- Idle: the zone's Chebyshev zone distance from every peer's reference position and from the
+  server's own is above Near + Far + 1 of the largest simulation distance in use (8 zones with the
+  game's maximum, Near 5 + Far 2), and the server has no instance of its terrain compiler loaded.
+  Nobody can have it loaded, so nothing re-saves over the result.
+- A pass decodes the saved `TCData`, heals it (catch-up for the whole elapsed time, capped), and
+  writes it back in vanilla's layout after claiming the ZDO for the server, like vanilla server code
+  does. Ownership is left to vanilla's release loop. A zone whose data cannot be read logs one
+  warning and loses its flag.
 - Time is world time, so sleeping counts as passing days. One in-game day =
   `EnvMan.instance.m_dayLengthSec` (`long`, default 1,200 s; verified).
-
+- Test commands on the server or host: `weathering_age <days>` (ages edits within 3 zones) and
+  `weathering_status`.
 ### Which vertices may heal
 
 A vertex is **frozen** (left as is and treated as a fixed boundary for erosion) when any of:
@@ -157,7 +174,9 @@ A zone's flag is cleared when every non-frozen modified vertex is settled:
   below `ResetEpsilon` (for example 2 cm) are zeroed and their `m_modifiedHeight` cleared. End
   state: deep pits settle into a permanent dip with 0.35 m per m slopes, never flat ground.
 
-Vertices frozen by a base, paved paint or a piece do not keep the flag set on their own. They are
+Vertices still waiting out their delay keep the flag set (otherwise a zone checked before its
+edits are old enough would never heal). Vertices frozen by a base, paved paint, a piece or a zone
+border do not keep the flag set on their own. They are
 re-examined when an edit happens in the zone again. Consequence: removing a workbench does not
 start healing the ground it protected until something is edited in that zone. (Acceptable for v1;
 a cheap extra check on load could be added later.)
@@ -195,17 +214,19 @@ A config list of extra prefab names with radii covers other mods.
 
 Vertices on a zone's edge exist in both zones' `TerrainComp`s. Vanilla never writes heights into a
 neighbour: a `TerrainOp` is sent to every heightmap it overlaps and each edits its own copy
-(verified). Both copies must end with identical values or a seam appears. Rule for v1: border
-vertices are frozen in a pass, except when the neighbouring `TerrainComp` is loaded and owned by
-the same peer; then the border line is eroded once and the same values are written to both zones,
-and both are saved.
+(verified). Both copies must end with identical values or a seam appears. Rule for v1 (revised with
+server-side healing): border vertices are frozen in a pass, except when the neighbouring zone has
+saved terrain data and is idle too; then the border line is eroded with this zone and the resulting
+heights are written into the neighbour's copy, which is saved and flagged. Corners, shared by four
+zones, are always frozen.
 
 ### Multiplayer
 
-Healing runs only on the zone owner and is saved to the ZDO, so it syncs to other peers like any
-terrain edit. Workspace rule: `NetworkCompatibility(EveryoneMustHaveMod, VersionStrictness.Minor)`.
-Gameplay config is admin-only and synced.
-
+Revised during implementation: healing runs only on the server, on zones no peer is near, and is
+saved to the ZDO with a new data revision, so a player who comes back receives the healed terrain
+like any terrain edit. Clients only record edit stamps on the zones they own. Workspace rule:
+`NetworkCompatibility(EveryoneMustHaveMod, VersionStrictness.Minor)`. Gameplay config is
+admin-only and synced.
 ## Configuration (initial)
 
 | Key | Default | Meaning |

@@ -6,3 +6,5 @@
   and raised mounds slump into soft ditches and dips, 3 in-game days after the spot was last edited.
 - Paved roads, player bases, ground near your buildings and Warden stones never weather.
 - Existing earthworks outside bases weather too; removing the mod does not bring them back.
+- Ground heals on the server (or host) while no player is nearby, so you find it weathered when
+  you come back. Test commands for the server or host: `weathering_age` and `weathering_status`.

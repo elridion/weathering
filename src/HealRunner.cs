@@ -82,7 +82,9 @@ namespace Weathering
         private static bool[] s_deepNorth = new bool[0];
         private static float[] s_offset = new float[0];
         private static int[] s_stampSnapshot = new int[0];
-        private static float[] s_fadeAmount = new float[0];
+        private static float[] s_grassReach = new float[0];
+        private static float[] s_fallbackFade = new float[0];
+        private static float[] s_grassDistance = new float[0];
         private static readonly List<ProtectedCircle> s_circles = new List<ProtectedCircle>();
         private static readonly Neighbour[] s_neighbours = { new Neighbour(), new Neighbour(), new Neighbour(), new Neighbour() };
         // Diagonal neighbours by corner (CornerId), linked only to let a modified corner vertex move.
@@ -555,7 +557,7 @@ namespace Weathering
             }
         }
 
-        // Decodes the zone and its linked neighbours, builds the masks, fades the paint and loads the
+        // Decodes the zone and its linked neighbours, builds the masks, grows grass back and loads the
         // offsets, then leaves the pass in flight for ErodeSlice. Writes only for a zone seen for the
         // first time or one whose data cannot be read; those end here. <paramref name="writer"/> is
         // who writes the results (WriterOf).
@@ -599,13 +601,16 @@ namespace Weathering
             float elapsedDays = Mathf.Max(0f, (now - last) / (float)day);
             float delayMinutes = WeatheringPlugin.DelayDays.Value * day / 60f;
             float dayMinutes = day / 60f;
-            float fadeDays = WeatheringPlugin.FadeDays.Value;
+            float spreadMeters = WeatheringPlugin.GrassSpreadMeters.Value;
+            float fallbackMinutes = delayMinutes + Healer.FallbackDays * dayMinutes;
 
             EnsureBuffers(count);
             bool[] frozen = s_frozen;
             bool[] deepNorth = s_deepNorth;
             float[] offset = s_offset;
-            float[] fadeAmount = s_fadeAmount;
+            float[] grassReach = s_grassReach;
+            float[] fallbackFade = s_fallbackFade;
+            float[] grassDistance = s_grassDistance;
             // The most days any due height edit has been past its delay since the last pass; a zone
             // whose edits only just came due gets that much erosion, not the whole time since the last pass.
             float erosionDays = 0f;
@@ -632,15 +637,16 @@ namespace Weathering
 
                     float wx = centre.x + (x - half) * s_scale;
                     float wz = centre.z + (y - half) * s_scale;
-                    // Only painted vertices need the biome, and it is the costliest lookup here.
-                    deepNorth[i] = modifiedPaint && worldGen != null &&
+                    int side = BorderSide(x, y, width);
+                    // Only painted vertices need the biome, and it is the costliest lookup here. Border
+                    // vertices need it too: MirrorVertex must not clear a neighbour's snow depth.
+                    deepNorth[i] = (modifiedPaint || side >= 0) && worldGen != null &&
                         worldGen.GetBiome(wx, wz) == Heightmap.Biome.DeepNorth;
 
                     int spotStamp = stamps[i];
                     bool fresh = IsFresh(spotStamp, nowMinutes, delayMinutes);
                     bool held = float.IsNaN(d) || fresh || (modifiedPaint && paint.b > PavedThreshold);
 
-                    int side = BorderSide(x, y, width);
                     if (side == CornerSide)
                     {
                         // A corner is shared by four zones. It moves only when all four copies are
@@ -688,16 +694,23 @@ namespace Weathering
 
                     frozen[i] = held;
                     if (fresh && StampStore.NeedsStamp(modifiedHeight, modifiedPaint, paint)) waiting = true;
+                    // A shared vertex that may heal starts from the most healed copy, so grass a
+                    // neighbour's pass already grew in here is not undone by mirroring this one back.
+                    if (!held && side >= 0 && !deepNorth[i]) MergeBorderPaint(data, i, x, y, side, width, pitch);
 
                     float spotDays = DueDays(spotStamp, elapsedDays, nowMinutes, delayMinutes, dayMinutes);
-                    fadeAmount[i] = fadeDays > 0f ? spotDays / fadeDays : 0f;
+                    grassReach[i] = spreadMeters > 0f ? spotDays * spreadMeters : 0f;
+                    fallbackFade[i] = DueDays(spotStamp, elapsedDays, nowMinutes, fallbackMinutes, dayMinutes) / Healer.FallbackFadeDays;
+                    grassDistance[i] = float.PositiveInfinity;
                     // Frozen but due height edits count too (a paved edge, a base rim, a zone border):
                     // they stay put but their steep edge still erodes the unfrozen ground next to them.
                     if (!fresh && modifiedHeight && spotDays > erosionDays) erosionDays = spotDays;
                 }
             }
 
-            bool paintPending = Healer.FadePaint(data.Paint, data.ModifiedPaint, frozen, deepNorth, fadeAmount);
+            SeedBorderGrass(grassDistance, worldGen, centre, half);
+            bool paintPending = Healer.SpreadGrass(data.Paint, data.ModifiedPaint, frozen, deepNorth,
+                grassReach, fallbackFade, grassDistance, pitch, s_scale);
 
             float erosionRate = WeatheringPlugin.ErosionRate.Value;
             int iterations = Mathf.Min(Mathf.RoundToInt(erosionDays * Healer.IterationsPerDay * erosionRate),
@@ -847,8 +860,9 @@ namespace Weathering
             }
         }
 
-        // Writes this zone's new border heights into each linked neighbour's copy of the same vertices,
-        // so all zones end with identical values. Paint is per zone and is not copied. Each changed
+        // Writes this zone's new border heights, and the dirt and cultivated weight grass took back,
+        // into each linked neighbour's copy of the same vertices, so all zones end with identical
+        // values (each zone renders its own copy, so a mismatch shows as a seam). Each changed
         // neighbour the server writes is healed next (s_dueNow), so its side of the border catches up.
         private static void MirrorBorders(TerrainData data, int[] stamps)
         {
@@ -890,10 +904,114 @@ namespace Weathering
             }
         }
 
+        // Lowers this zone's dirt and cultivated weight on an unfrozen shared vertex to that of every
+        // linked copy (a corner has three), clearing the vertex's paint flag like Healer does when
+        // nothing is left. A copy without modified paint shows grass, weight 0.
+        private static void MergeBorderPaint(TerrainData data, int i, int x, int y, int side, int width, int pitch)
+        {
+            if (side == CornerSide)
+            {
+                int sideX = x == width ? 0 : 1;
+                int sideY = y == width ? 2 : 3;
+                MergePaintCopy(data, i, s_neighbours[sideX], MirrorIndex(sideX, x, y, width, pitch));
+                MergePaintCopy(data, i, s_neighbours[sideY], MirrorIndex(sideY, x, y, width, pitch));
+                MergePaintCopy(data, i, s_diagonals[CornerId(x, y, width)], DiagonalIndex(x, y, width, pitch));
+                return;
+            }
+            MergePaintCopy(data, i, s_neighbours[side], MirrorIndex(side, x, y, width, pitch));
+        }
+
+        private static void MergePaintCopy(TerrainData data, int i, Neighbour neighbour, int j)
+        {
+            if (!neighbour.Linked || !data.ModifiedPaint[i]) return;
+            Color c = data.Paint[i];
+            if (!Healer.IsPaintPending(c)) return;
+            TerrainData other = neighbour.Data;
+            float r = 0f;
+            float g = 0f;
+            if (other.ModifiedPaint[j])
+            {
+                Color o = other.Paint[j];
+                if (float.IsNaN(o.r) || float.IsNaN(o.g)) return;
+                r = o.r;
+                g = o.g;
+            }
+            if (r >= c.r && g >= c.g) return;
+            c.r = Mathf.Min(c.r, r);
+            c.g = Mathf.Min(c.g, g);
+            data.Paint[i] = c;
+            if (c.r <= 0f && c.g <= 0f && c.b <= 0f) data.ModifiedPaint[i] = false;
+        }
+
+        // Seeds the grass distance of border vertices from the linked neighbours' vertices one step
+        // across the border (the border row itself is shared, so the useful one is the next row in),
+        // straight across and diagonally. An unlinked neighbour gives no seeds; its border is frozen
+        // anyway, so only border vertices that are grass themselves can carry the front from there.
+        private static void SeedBorderGrass(float[] distance, WorldGenerator worldGen, Vector3 centre, float half)
+        {
+            if (!s_sharedBorders) return;
+            int width = s_width;
+            int pitch = s_pitch;
+            float straight = s_scale;
+            float diagonal = s_scale * 1.41421356f;
+            for (int side = 0; side < s_neighbours.Length; side++)
+            {
+                Neighbour neighbour = s_neighbours[side];
+                if (!neighbour.Linked) continue;
+                int inward = s_sideDx[side] + s_sideDy[side] * pitch;
+                for (int k = 0; k <= width; k++)
+                {
+                    BorderVertex(side, k, width, out int x, out int y);
+                    int i = y * pitch + x;
+                    for (int t = -1; t <= 1; t++)
+                    {
+                        int along = k + t;
+                        if (along < 0 || along > width) continue;
+                        BorderVertex(side, along, width, out int bx, out int by);
+                        int j = MirrorIndex(side, bx, by, width, pitch) + inward;
+                        float wx = centre.x + (bx + s_sideDx[side] - half) * s_scale;
+                        float wz = centre.z + (by + s_sideDy[side] - half) * s_scale;
+                        if (!IsNeighbourGrass(neighbour.Data, j, wx, wz, worldGen)) continue;
+                        float d = t == 0 ? straight : diagonal;
+                        if (d < distance[i]) distance[i] = d;
+                    }
+                }
+            }
+        }
+
+        // Healer.IsGrassSource for a neighbour's vertex. Only a vertex that is grass solely because
+        // its g counts as snow needs the biome, the costliest lookup, so the rest skip it.
+        private static bool IsNeighbourGrass(TerrainData other, int j, float wx, float wz, WorldGenerator worldGen)
+        {
+            Color c = other.Paint[j];
+            bool modified = other.ModifiedPaint[j];
+            if (Healer.IsGrassSource(c, modified, false)) return true;
+            return Healer.IsGrassSource(c, modified, true) && worldGen != null &&
+                worldGen.GetBiome(wx, wz) == Heightmap.Biome.DeepNorth;
+        }
+
         // Copies vertex i of this zone into vertex j of a neighbour's copy, marking it changed.
         private static void MirrorVertex(TerrainData data, int[] stamps, int i, Neighbour neighbour, int j)
         {
             TerrainData other = neighbour.Data;
+            // Dirt and cultivated weight only ever drops, and Prepare merged the lowest copy in, so this
+            // copy is at most the neighbour's. Paved weight and alpha were painted alike in both and are
+            // never changed. The Deep North keeps its snow depth in g.
+            if (!s_deepNorth[i] && other.ModifiedPaint[j])
+            {
+                Color o = other.Paint[j];
+                float r = data.ModifiedPaint[i] ? data.Paint[i].r : 0f;
+                float g = data.ModifiedPaint[i] ? data.Paint[i].g : 0f;
+                if (Healer.IsPaintPending(o) && (o.r > r || o.g > g))
+                {
+                    o.r = Mathf.Min(o.r, r);
+                    o.g = Mathf.Min(o.g, g);
+                    other.Paint[j] = o;
+                    if (o.r <= 0f && o.g <= 0f && o.b <= 0f) other.ModifiedPaint[j] = false;
+                    neighbour.Changed = true;
+                }
+            }
+
             bool modified = data.ModifiedHeight[i];
             float level = modified ? data.LevelDelta[i] : 0f;
             float smooth = modified ? data.SmoothDelta[i] : 0f;
@@ -927,8 +1045,8 @@ namespace Weathering
 
         // Links each edge neighbour with saved data that the pass may write along with this zone:
         // an idle one outside sleep mode, one with the same writer in sleep mode. Other borders stay
-        // frozen for this pass. A diagonal neighbour is linked only for a modified corner whose two
-        // side neighbours are linked; otherwise that corner stays frozen.
+        // frozen for this pass. A diagonal neighbour is linked only for a corner with a height edit or
+        // dirt whose two side neighbours are linked; otherwise that corner stays frozen.
         private static void LoadNeighbours(Vector2s zone, TerrainData data, int pitch, int nowMinutes, long writer, bool sleeping)
         {
             for (int side = 0; side < s_neighbours.Length; side++)
@@ -952,7 +1070,9 @@ namespace Weathering
                 if (!s_neighbours[sideX].Linked || !s_neighbours[sideY].Linked) continue;
                 int x = sideX == 0 ? width : 0;
                 int y = sideY == 2 ? width : 0;
-                if (!data.ModifiedHeight[y * pitch + x]) continue;
+                int i = y * pitch + x;
+                bool dirt = data.ModifiedPaint[i] && Healer.IsPaintPending(data.Paint[i]);
+                if (!data.ModifiedHeight[i] && !dirt) continue;
                 var other = new Vector2s(zone.x + s_sideDx[sideX], zone.y + s_sideDy[sideY]);
                 Link(s_diagonals[corner], other, pitch, nowMinutes, writer, sleeping);
             }
@@ -991,7 +1111,9 @@ namespace Weathering
             s_deepNorth = new bool[count];
             s_offset = new float[count];
             s_stampSnapshot = new int[count];
-            s_fadeAmount = new float[count];
+            s_grassReach = new float[count];
+            s_fallbackFade = new float[count];
+            s_grassDistance = new float[count];
         }
 
         private static bool IsFresh(int stamp, int nowMinutes, float delayMinutes) =>
@@ -1036,7 +1158,7 @@ namespace Weathering
             return -1;
         }
 
-        // The k-th vertex along a side, corners excluded (k runs 1 to width - 1).
+        // The k-th vertex along a side; k = 0 and k = width are its two corners.
         private static void BorderVertex(int side, int k, int width, out int x, out int y)
         {
             switch (side)

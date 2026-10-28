@@ -19,6 +19,10 @@
 - Trees felled inside player bases no longer leave a regrowth spot behind.
 - Regrown saplings always grow into their tree, even in dense forest, under overhangs or in the
   mountains.
+- Grass now grows back in from the edges of dirt and tilled ground, 2 m per in-game day by default,
+  instead of the whole patch fading at once. Dirt grass cannot reach (shut in by roads or bases)
+  still fades on its own 10 in-game days after its delay ran out.
+- The `FadeDays` setting is replaced by `GrassSpreadMeters`.
 - Players on 0.1.x cannot play together with 0.2.0.
 
 ## 0.1.0

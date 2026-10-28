@@ -20,7 +20,7 @@ namespace Weathering
         public const string PluginVersion = "0.2.0";
 
         public static ConfigEntry<float> DelayDays;
-        public static ConfigEntry<float> FadeDays;
+        public static ConfigEntry<float> GrassSpreadMeters;
         public static ConfigEntry<float> ErosionRate;
         public static ConfigEntry<float> BaseMargin;
         public static ConfigEntry<float> PieceMargin;
@@ -35,9 +35,9 @@ namespace Weathering
             DelayDays = Config.Bind("General", "DelayDays", 3f,
                 new ConfigDescription("In-game days after a spot was last edited before it starts to heal, and after a tree was felled before its sapling appears.",
                     new AcceptableValueRange<float>(0.1f, 30f), adminOnly));
-            FadeDays = Config.Bind("General", "FadeDays", 2f,
-                new ConfigDescription("In-game days dirt and cultivated paint take to fade fully once healing starts.",
-                    new AcceptableValueRange<float>(0.1f, 30f), adminOnly));
+            GrassSpreadMeters = Config.Bind("General", "GrassSpreadMeters", 2f,
+                new ConfigDescription("Meters per in-game day that grass grows back into dirt and cultivated ground from its edges once healing starts.",
+                    new AcceptableValueRange<float>(0.25f, 16f), adminOnly));
             ErosionRate = Config.Bind("General", "ErosionRate", 1f,
                 new ConfigDescription("Relative strength of height erosion: 1 is the default look, 0 turns height erosion off, 2 is twice as fast.",
                     new AcceptableValueRange<float>(0f, 5f), adminOnly));

@@ -1,7 +1,7 @@
 ﻿# Weathering
 
-Valheim mod that lets player terrain edits outside player bases heal: dirt and cultivated paint fade,
-height edits erode (diffusion of the offset field), each spot 3 in-game days after its last edit.
+Valheim mod that lets player terrain edits outside player bases heal: grass grows back into dirt and
+cultivated paint from its edges, height edits erode (diffusion of the offset field), each spot 3 in-game days after its last edit.
 Stack, build, verification and git workflow are shared by all mods: see `../CLAUDE.md` and
 `../.claude/rules/`. `docs/design.md` is the spec, `docs/plan.md` the task list.
 
@@ -12,7 +12,7 @@ Stack, build, verification and git workflow are shared by all mods: see `../CLAU
 - `src/TerrainPatches.cs` stamps edited vertices on the zone owner; `src/StampStore.cs` keeps the
   stamps, pending flag and last-pass time on the terrain compiler ZDO.
 - `src/BaseIndex.cs` finds bases, Warden stones and pieces around a zone from saved ZDOs.
-- `src/Healer.cs` is the pure paint-fade and erosion math.
+- `src/Healer.cs` is the pure grass-spread (paint) and erosion math.
 - `src/TerrainData.cs` decodes and encodes a zone's saved `TCData` without a `TerrainComp`.
 - `src/HealRunner.cs` heals flagged zones on the server while nobody is near (`IsZoneIdle` is the
   shared "safe to write this zone" test), and near sleeping players while the night is skipped;

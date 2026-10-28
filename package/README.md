@@ -11,7 +11,10 @@ recover on its own, the way you would expect nature to.
 
 ## What heals
 
-- **Dirt and cultivated ground** fade back to natural ground, so grass returns.
+- **Dirt and cultivated ground** turn back into natural ground: grass grows back in from the edges,
+  2 m per in-game day (the default), with a soft, ragged front. A patch grass cannot reach, such as
+  a strip shut in between a paved road and a base, fades on its own 10 in-game days after its
+  delay ran out.
 - **Dug holes and raised mounds** slump over time: a steep pit widens into a shallow, soft-edged
   ditch, a raised wall into a mound. The earth is moved, not removed, and the ground never returns
   to its original shape.
@@ -81,7 +84,7 @@ heal only after something in the same zone (64 m square) is dug, raised or paint
 | Key | Default | Description |
 | --- | --- | --- |
 | `DelayDays` | 3 | In-game days after a spot was last edited before it starts to heal, and after a tree was felled before its sapling appears (0.1-30) |
-| `FadeDays` | 2 | In-game days dirt and cultivated paint take to fade fully (0.1-30) |
+| `GrassSpreadMeters` | 2 | Meters per in-game day that grass grows back into dirt and cultivated ground from its edges once healing starts (0.25-16) |
 | `ErosionRate` | 1 | Relative strength of height erosion: 1 is the default look, 0 turns height erosion off, 2 is twice as fast (0-5) |
 | `BaseMargin` | 10 | Extra protected distance in meters around every player base area (0-50) |
 | `PieceMargin` | 4 | Protected distance in meters around any player-built piece (0-20) |

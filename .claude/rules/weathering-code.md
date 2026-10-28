@@ -10,7 +10,7 @@ Adds to the workspace-wide `code-style.md` and `valheim-modding.md` in `../.clau
 ## Verified vanilla facts
 
 - Paint colours: dirt r, cultivated g, paved b, alpha = vegetation mask (never touched). Paved means
-  b > 0.5. Deep North vertices hold snow depth in g: no paint fade there.
+  b > 0.5. Deep North vertices hold snow depth in g: their paint is never changed (they are grass sources when they hold no dirt).
 - Final height is base + `levelDelta` + `smoothDelta`, clamped to base +-8. Erosion works on
   `d = levelDelta + smoothDelta` and writes back `levelDelta = Clamp(d, -8, 8)`, `smoothDelta = 0`.
 - Never hardcode the grid size: use the `TerrainComp`'s `m_width` and `m_pitch`, or without one

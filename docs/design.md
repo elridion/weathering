@@ -19,8 +19,9 @@ vanilla player base areas, and leaves vegetation for later.
 
 ## Goals
 
-- **Paint fades.** Dirt and cultivated paint on the ground fades back to natural ground, so grass
-  returns (grass is drawn from the paint by the clutter system; nothing else is needed for it).
+- **Grass grows back.** Dirt and cultivated paint on the ground turns back into natural ground from
+  its edges inward, so grass returns (grass is drawn from the paint by the clutter system; nothing
+  else is needed for it).
 - **Paved stays.** Paved paint never fades. Paved roads keep their surface and their height.
 - **Height erodes, never resets.** Height edits (`m_levelDelta` / `m_smoothDelta` offsets from the
   generated terrain) spread out over time, like material sliding down slopes: a steep pit widens
@@ -115,7 +116,7 @@ nobody is near, without instantiating anything.
   of sectors per frame; a new sweep starts at most every 10 s) and heals one zone at a time, the
   next pass starting at least 0.5 s real time after the previous one ended.
 - A pass is spread over frames so big catch-ups do not stutter: one frame decodes and builds the
-  masks and fades paint, erosion runs 24 iterations per frame, and a last frame writes. Nothing is
+  masks and grows grass back, erosion runs 24 iterations per frame, and a last frame writes. Nothing is
   written before that frame. The pass is dropped unwritten (the zone stays flagged and is retried)
   if the zone stops being idle, the world changes, or at the write the data revision of the zone or
   of a linked neighbour changed since it was read, or a linked neighbour is no longer idle. A zone is a candidate when its flag is set, it is idle, and its last pass is at
@@ -132,8 +133,8 @@ nobody is near, without instantiating anything.
   edit them), and after writing such a zone the server makes its loaded `TerrainComp` reload at once
   (`CheckLoad`). A host's own reference position always counts.
 - With `ErosionRate` 0, steep slopes alone do not keep a zone flagged.
-- A pass decodes the saved `TCData`, heals it (catch-up per spot: each vertex fades for the days
-  since its own delay ran out, at most the time since the zone's last pass; erosion runs for the
+- A pass decodes the saved `TCData`, heals it (catch-up per spot: grass spreads into each vertex
+  for the days since its own delay ran out, at most the time since the zone's last pass; erosion runs for the
   most such days among the height edits past their delay, frozen ones included since their edges
   still erode the ground next to them, capped at 240 iterations), and
   writes it back in vanilla's layout after claiming the ZDO for the server, like vanilla server code
@@ -168,7 +169,7 @@ nobody is near, without instantiating anything.
   A pass's "now" is the skip target, so a server stopped mid-skip saves a world time behind the
   last-pass time of the zones it healed that night. A world time behind the last pass counts as
   due, so after a restart those zones get one more pass. Harmless: with no time elapsed since the
-  last pass it fades and erodes nothing and only resets the last-pass time to the real now.
+  last pass it spreads and erodes nothing and only resets the last-pass time to the real now.
   Regrowth sites near players regrow during sleep mode as well (the sapling ZDO is created and
   the marker destroyed on the server, as vanilla's server does near players).
 - Test commands on the server or host: `weathering_age <days>` (ages edits within 3 zones) and
@@ -184,17 +185,59 @@ A vertex is **frozen** (left as is and treated as a fixed boundary for erosion) 
 - it lies inside a player base area plus `BaseMargin`;
 - it lies within `PieceMargin` of any player-built piece (my call, see below).
 
-### Paint fade
+### Grass spread (paint)
 
-For each unfrozen vertex with modified paint: move dirt (r) and cultivated (g) toward 0 over
-`FadeDays` (default 2) after the delay, keeping alpha (the vegetation mask) untouched; when r and g
-fade to 0 and b is 0, clear `m_modifiedPaint` for that vertex so the generated mask shows again.
-A vertex that held no r or g to begin with (the cultivator's grass, `PaintType.Reset`, paints
-0,0,0 and keeps alpha) is left as it is: there is nothing to fade, and clearing it would swap the
-generated paint and vegetation back in at once.
-Paved weight (b) is never reduced; a vertex with b above 0.5 (vanilla's own cleared threshold) is
-paved. Deep North vertices are skipped for paint (g holds snow depth there; verified in
-`PaintCleared`). Paint colours (verified): dirt (1,0,0,1), cultivated (0,1,0,1), paved (0,0,1,1).
+Revised with the user (it first faded every vertex uniformly over `FadeDays`): grass grows back in
+from the edges of dirt and cultivated ground, `GrassSpreadMeters` (default 2) metres per in-game day.
+Code: `Healer.SpreadGrass`, fed per vertex by `HealRunner.Prepare`.
+
+- **Sources:** vertices with no dirt (r) or cultivated (g) weight (at most 0.01, vanilla's brush
+  edges leave faint tints): unpainted ground, and the cultivator's grass (`PaintType.Reset` paints
+  0,0,0 and keeps alpha). Paved vertices (b above 0.5) are never sources. Frozen vertices count as
+  sources when they hold no dirt (grass inside a base margin is real grass), never when they do
+  (protected or fresh dirt must not seed grass). In the Deep North g is snow depth, so a vertex
+  there is a source when it has no dirt, whatever its g.
+- **Reclaimable:** unfrozen vertices with modified paint, r or g above 0, not paved and not in the
+  Deep North (g holds snow depth there; verified in `PaintCleared`; Deep North vertices are never
+  changed). Unfrozen implies the vertex's own delay ran out.
+- **Distance:** each pass computes every vertex's distance in metres to the nearest source with a
+  chamfer distance transform on the vertex grid (straight steps of the vertex spacing, diagonal
+  steps of spacing times the square root of 2; forward and backward sweeps, repeated up to 4 times
+  while anything changes, so a front can wind around obstacles). Only sources and reclaimable
+  vertices carry the front: frozen dirt (fresh edits, bases, piece margins, Warden stones, held zone
+  borders), Deep North dirt and paved ground block it, so grass never jumps through fresh dirt or
+  across a road. Buffers are reused; no allocation per pass.
+- **Reach:** each vertex's reach is `GrassSpreadMeters` times its own due days, the same catch-up
+  basis as erosion (the days since its own delay ran out, at most the time since the zone's last
+  pass). A reclaimable vertex within its reach becomes grass (r = g = 0). Up to a soft edge of 1 m
+  further it loses the fraction of its weight it lies inside that band ((reach + 1 m - distance) /
+  1 m), so the front is ragged rather than a hard ring. The full reach is cleared, not reach minus
+  the band, so the front really advances `GrassSpreadMeters` a day; below one vertex spacing a day
+  the band takes weight off in steps, so slow spread still arrives. Alpha (the vegetation mask) is
+  never touched; when r and g reach 0 and b is 0, `m_modifiedPaint` is cleared so the generated mask
+  shows again. Nothing new is saved: the next pass recomputes from the paint as it is, partly
+  reclaimed vertices are not sources until r and g are 0 but are nearer the front, so it keeps
+  moving.
+- **Fallback:** dirt grass can never reach (a strip enclosed by a paved road and a base edge) fades
+  uniformly as the old rule did: once a vertex's own delay ran out more than 10 in-game days ago it
+  loses weight over 2 in-game days for the time since then (also capped by the time since the last
+  pass). Each vertex takes the larger of its spread and fallback amounts. Big patches whose centre
+  grass has not reached in those 10 days fade there too.
+- **Zone borders:** each zone's border vertices are seeded from the linked neighbours' vertices one
+  step across the border (the border row itself is shared, so the useful one is the neighbour's
+  next row in), straight across at the vertex spacing and diagonally at spacing times the square
+  root of 2. Border vertices facing an unlinked neighbour are frozen anyway (dirt there blocks,
+  grass there is a source), so an unlinked neighbour gives no seeds and needs no decoding; that
+  includes zones without a terrain compiler, whose shared border vertices this zone holds frozen.
+  A shared vertex that may heal first takes the lowest r and g of every linked copy (a copy without
+  modified paint counts as 0), and after the pass its r and g are mirrored into the linked
+  neighbours like heights, so every copy of a border vertex ends identical. Mirroring never touches
+  b, alpha or a Deep North vertex. A corner holding dirt links its diagonal neighbour like a corner
+  with a height edit, so it can heal too.
+- **Done:** a zone stays flagged while any reclaimable vertex still holds dirt or cultivated weight;
+  dirt the grass cannot reach still clears through the fallback, so the flag does not stay set forever.
+
+Paint colours (verified): dirt (1,0,0,1), cultivated (0,1,0,1), paved (0,0,1,1).
 
 ### Erosion
 
@@ -326,7 +369,7 @@ Regrowth happens on the server while nobody is near the zone.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `DelayDays` | 3 | In-game days after the last edit of a spot before it starts healing |
-| `FadeDays` | 2 | In-game days for dirt and cultivated paint to fade fully |
+| `GrassSpreadMeters` | 2 | Meters per in-game day grass grows back into dirt and cultivated ground (replaced `FadeDays`) |
 | `ErosionRate` | builder's call | Strength of erosion per in-game day |
 | `BaseMargin` | 10 m | Extra protected distance around every player base area |
 | `PieceMargin` | 4 m | Protected distance around any player-built piece |

@@ -245,6 +245,13 @@ Regrowth happens on the server while nobody is near the zone.
   spawns, 0 if none) and `weathering_felled` (StampStore minutes, at least 1).
 - Tree to sapling comes from every `Plant` prefab's `m_grownPrefabs`, rebuilt on each ZNetScene
   load; a tree no sapling grows into gets no marker.
+- The server sweeps the markers like the terrain compilers (incremental, a new sweep at most every
+  10 s, a few sites acted on per frame). A site is due `DelayDays` after `weathering_felled` and is
+  handled only while its zone passes the heal runner's idle test. A due site inside any protected
+  circle (base, Warden stone, piece) or whose tree no longer maps to a sapling is destroyed; one with
+  its stump within 1 m is kept and rechecked an in-game day later; otherwise the sapling ZDO is
+  created the way `ZNetView.Awake` creates one (persistent, type, distant flags from the sapling's
+  `ZNetView`, rotation, `plantTime` now) and the marker is destroyed after claiming it.
 ## Configuration (initial)
 
 | Key | Default | Meaning |

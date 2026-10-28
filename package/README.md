@@ -17,19 +17,26 @@ recover on its own, the way you would expect nature to.
   to its original shape.
 - Every spot has its own timer. Nothing changes until it was last edited 3 in-game days ago, and
   digging next to an old pit does not freeze the old pit. Sleeping counts as time passing.
+- **Felled trees** regrow: 3 in-game days after a tree was felled, its sapling appears where it
+  stood and grows like one you planted. A stump left standing keeps its tree from regrowing until
+  the stump is removed. Trees with no vanilla sapling (such as autumn birches) do not regrow, and
+  rocks and ore never come back.
 - Healing happens on the server (or the host) while no player is nearby, so you never watch the
-  ground move: you find it weathered when you come back.
+  ground move or a sapling pop up: you find it weathered when you come back.
 
 ## Console commands
 
 On the server or host (in single player, your own game). Handy for testing:
 
-- `weathering_age <days>` (needs `devcommands`): makes terrain edits within 3 zones of you that
-  many in-game days older. Walk away to let them heal; the command says how far.
-- `weathering_status`: how many zones wait to heal, and whether the zone you stand in is waiting,
+- `weathering_age <days>` (needs `devcommands`): makes terrain edits and felled trees within 3
+  zones of you that many in-game days older. Walk away to let them heal and regrow; the command
+  says how far.
+- `weathering_status`: how many zones wait to heal and felled trees wait to regrow, and whether the zone you stand in is waiting,
   when it last healed and whether it can heal right now.
 
 ## What never heals
+
+These areas neither heal nor regrow trees:
 
 - **Player bases:** anything inside the area of a workbench, campfire, hearth or other station,
   plus a margin, and around Warden stones (even switched-off ones).
@@ -44,7 +51,7 @@ On the server or host (in single player, your own game). Handy for testing:
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `DelayDays` | 3 | In-game days after a spot was last edited before it starts to heal (0.1-30) |
+| `DelayDays` | 3 | In-game days after a spot was last edited before it starts to heal, and after a tree was felled before its sapling appears (0.1-30) |
 | `FadeDays` | 2 | In-game days dirt and cultivated paint take to fade fully (0.1-30) |
 | `ErosionRate` | 1 | Relative strength of height erosion; 0 turns it off (0-5) |
 | `BaseMargin` | 10 | Extra protected distance in meters around every player base area (0-50) |

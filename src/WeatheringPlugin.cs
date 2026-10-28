@@ -33,7 +33,7 @@ namespace Weathering
             var adminOnly = new ConfigurationManagerAttributes { IsAdminOnly = true };
 
             DelayDays = Config.Bind("General", "DelayDays", 3f,
-                new ConfigDescription("In-game days after a spot was last edited before it starts to heal.",
+                new ConfigDescription("In-game days after a spot was last edited before it starts to heal, and after a tree was felled before its sapling appears.",
                     new AcceptableValueRange<float>(0.1f, 30f), adminOnly));
             FadeDays = Config.Bind("General", "FadeDays", 2f,
                 new ConfigDescription("In-game days dirt and cultivated paint take to fade fully once healing starts.",
@@ -60,6 +60,8 @@ namespace Weathering
 
             // Does nothing on clients; on the server it heals flagged zones nobody is near.
             gameObject.AddComponent<HealRunner>();
+            // Likewise plants saplings where trees were felled.
+            gameObject.AddComponent<RegrowthRunner>();
             HealCommands.Register();
 
             _harmony = new Harmony(PluginGuid);

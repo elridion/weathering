@@ -39,7 +39,8 @@ namespace Weathering
             public override string Name => "weathering_age";
 
             public override string Help =>
-                "<days> - test command: make terrain edits within 3 zones of you that many in-game days older; walk away to let them heal " +
+                "<days> - test command: make terrain edits and felled trees within 3 zones of you that many in-game days older; " +
+                "walk away to let them heal and regrow " +
                 "(server or host; on a host it takes ownership of those zones)";
 
             public override bool IsCheat => true;
@@ -86,8 +87,19 @@ namespace Weathering
                     StampStore.SetLast(zdo, Math.Max(1L, last - shiftSeconds));
                     StampStore.SetPending(zdo, true);
                 }
-                Print($"Aged {zdos.Count} edited zones by {days.ToString(CultureInfo.InvariantCulture)} days. " +
-                    $"Walk more than {HealRunner.IdleDistance() * 64} m away to let them heal.");
+                int zones = zdos.Count;
+
+                RegrowthRunner.FindSites(ZoneSystem.GetZone(player.transform.position), AgeRadius, zdos);
+                foreach (ZDO zdo in zdos)
+                {
+                    int felled = zdo.GetInt(RegrowthSites.FelledKey);
+                    HealRunner.Claim(zdo);
+                    zdo.Set(RegrowthSites.FelledKey, Math.Max(1, Math.Min(felled, nowMinutes) - shiftMinutes));
+                    RegrowthRunner.ForgetBlocked(zdo);
+                }
+
+                Print($"Aged {zones} edited zones and {zdos.Count} felled trees by {days.ToString(CultureInfo.InvariantCulture)} days. " +
+                    $"Walk more than {HealRunner.IdleDistance() * 64} m away to let them heal and regrow.");
             }
         }
 
@@ -95,14 +107,21 @@ namespace Weathering
         {
             public override string Name => "weathering_status";
 
-            public override string Help => "- how many zones wait to heal, and the state of the zone you stand in (server or host)";
+            public override string Help => "- how many zones wait to heal and trees wait to regrow, and the state of the zone you stand in (server or host)";
 
             public override void Run(string[] args)
             {
                 if (!CheckServer()) return;
-                Print(BaseIndex.IsReady
-                    ? $"Zones waiting to heal: {HealRunner.CountPending()} (as of the last sweep)."
-                    : "Weathering is not running yet: the base index is not built.");
+                if (BaseIndex.IsReady)
+                {
+                    RegrowthRunner.Count(out int sites, out int due);
+                    Print($"Zones waiting to heal: {HealRunner.CountPending()}. Felled trees waiting to regrow: {sites}, " +
+                        $"{due} of them old enough (as of the last sweeps).");
+                }
+                else
+                {
+                    Print("Weathering is not running yet: the base index is not built.");
+                }
 
                 Player player = Player.m_localPlayer;
                 if (!player || !HealRunner.EnsureGrid()) return;

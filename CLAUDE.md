@@ -19,6 +19,8 @@ Stack, build, verification and git workflow are shared by all mods: see `../CLAU
   `weathering_status`.
 - `src/TreePatches.cs` records a regrowth site when a tree is felled; `src/RegrowthSites.cs`
   registers the invisible marker prefab, maps trees to their saplings and writes the site keys.
+  `src/RegrowthRunner.cs` sweeps the sites on the server and, once due and idle, drops sites inside
+  protected circles or without a sapling, waits on a standing stump, else creates the sapling ZDO.
 - `tools/make_icon.ps1` generates `package/icon.png`. `docs/` design notes. `hexium.json` Hexium
   listing metadata.
 - The mod has no player-facing strings: no translations, no `AddLocalizations`.

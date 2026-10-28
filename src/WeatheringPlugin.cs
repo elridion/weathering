@@ -58,9 +58,10 @@ namespace Weathering
             PrefabManager.OnPrefabsRegistered += RegrowthSites.BuildSaplingMap;
             PrefabManager.OnVanillaPrefabsAvailable += RegrowthSites.Register;
 
-            // Does nothing on clients; on the server it heals flagged zones nobody is near.
+            // On the server it heals flagged zones nobody is near, and near sleeping players; on
+            // clients it only registers the RPC that applies overnight heals to zones they own.
             gameObject.AddComponent<HealRunner>();
-            // Likewise plants saplings where trees were felled.
+            // Likewise plants saplings where trees were felled (server only).
             gameObject.AddComponent<RegrowthRunner>();
             HealCommands.Register();
 

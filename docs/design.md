@@ -142,7 +142,10 @@ nobody is near, without instantiating anything.
   for the pass is the skip target, so the night counts. Pending flag, per-spot delay, protected
   circles, Deep North, frozen mask and erosion are unchanged; a zone still heals at most once per
   in-game day. There is no wait between passes and a whole pass (prepare, all erosion, write) runs
-  in one frame, since screens are dark; the data revision check at the write still applies.
+  in one frame, since screens are dark; further passes start in that frame until about 8 ms are
+  spent. Both runners restart at the front of their queue when the skip begins and keep going
+  round it until it ends. The data revision check at the write still applies, and after a write
+  the server or peer makes a loaded `TerrainComp` reload at once (`CheckLoad`).
   Who writes a zone that is not idle: if its terrain compiler ZDO is owned by the server itself
   (single player, the host's own zones) or by nobody or a peer that is gone, the server claims and
   writes it as usual, and a loaded `TerrainComp` reloads it by itself (`CheckLoad` on a data
@@ -152,7 +155,14 @@ nobody is near, without instantiating anything.
   still matches, else ignores it and the zone stays pending. Border vertices are mirrored only into
   neighbours with the same writer (both written by the server, or both owned by the same peer,
   sent in the same message and applied all or nothing); other borders stay frozen for that pass.
-  A pass started before the skip, or still running when it ends, needs the zone idle as usual.
+  The peer also refuses terrain data it cannot decode for its grid. A sleep-mode pass always
+  finishes within its frame. A normal pass still running when the skip begins finishes in sleep
+  mode, skipping the idle check, but writes only while the server is still the writer of the zone
+  and its linked neighbours; after the skip, passes need the zone idle again.
+  A pass's "now" is the skip target, so a server stopped mid-skip saves a world time behind the
+  last-pass time of the zones it healed that night. A world time behind the last pass counts as
+  due, so after a restart those zones get one more pass. Harmless: with no time elapsed since the
+  last pass it fades and erodes nothing and only resets the last-pass time to the real now.
   Regrowth sites near players regrow during sleep mode as well (the sapling ZDO is created and
   the marker destroyed on the server, as vanilla's server does near players).
 - Test commands on the server or host: `weathering_age <days>` (ages edits within 3 zones) and

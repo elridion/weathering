@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
+using HarmonyLib;
 
 namespace Weathering
 {
@@ -18,6 +20,12 @@ namespace Weathering
         internal const string RpcName = "Weathering_ApplyHeal";
 
         private static ZRoutedRpc s_registered;
+
+        // TerrainComp's private reload from its ZDO; null (and skipped) if a game update renames it.
+        private static readonly MethodInfo s_checkLoadMethod = AccessTools.Method(typeof(TerrainComp), "CheckLoad");
+        private static readonly Action<TerrainComp> s_checkLoad = s_checkLoadMethod != null
+            ? AccessTools.MethodDelegate<Action<TerrainComp>>(s_checkLoadMethod)
+            : null;
 
         /// <summary>One zone's new saved data. Null data or stamps, and a last of 0, keep what is there.</summary>
         internal struct Entry
@@ -46,6 +54,23 @@ namespace Weathering
             if (stamps != null) StampStore.SaveEncoded(zdo, stamps);
             if (last != 0L) StampStore.SetLast(zdo, last);
             StampStore.SetPending(zdo, pending);
+            ReloadLoaded(zdo);
+        }
+
+        /// <summary>
+        /// Makes a loaded TerrainComp of the ZDO take the data just written right away. It would
+        /// reload in its own Update, but an edit applied earlier in the same frame would work on its
+        /// old arrays and save them over the heal.
+        /// </summary>
+        internal static void ReloadLoaded(ZDO zdo)
+        {
+            if (s_checkLoad == null) return;
+            ZNetScene scene = ZNetScene.instance;
+            if (!scene) return;
+            ZNetView view = scene.FindInstance(zdo);
+            if (!view) return;
+            TerrainComp terrain = view.GetComponent<TerrainComp>();
+            if (terrain) s_checkLoad(terrain);
         }
 
         /// <summary>Sends the results to the peer that owns those zones, as one all-or-nothing message.</summary>
@@ -72,8 +97,10 @@ namespace Weathering
         {
             ZNet net = ZNet.instance;
             ZDOMan zdoMan = ZDOMan.instance;
-            // Only the server heals; the host writes its own zones directly and never sends this.
-            if (!net || net.IsServer() || zdoMan == null) return;
+            // The host writes its own zones directly and never sends this to itself.
+            if (!net || net.IsServer() || zdoMan == null || !HealRunner.EnsureGrid()) return;
+            // Sanity check, not security: only the server ever sends this, and the owner and
+            // revision checks below are what keep the write safe.
             ZNetPeer server = net.GetServerPeer();
             if (server == null || server.m_uid != sender) return;
 
@@ -108,6 +135,8 @@ namespace Weathering
             {
                 ZDO zdo = zdoMan.GetZDO(entry.Id);
                 if (zdo == null || !zdo.IsOwner() || zdo.DataRevision != entry.Revision) return;
+                // Never save terrain data vanilla could not load for this grid.
+                if (entry.TerrainData != null && !TerrainData.TryRead(entry.TerrainData, HealRunner.Pitch, out _)) return;
             }
             foreach (Entry entry in entries)
                 Write(zdoMan.GetZDO(entry.Id), entry.TerrainData, entry.Stamps, entry.Last, entry.Pending);

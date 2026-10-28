@@ -32,9 +32,15 @@ namespace Weathering
         public static bool TryRead(ZDO zdo, int pitch, out TerrainData data)
         {
             data = null;
-            if (zdo == null || pitch < 2) return false;
-            byte[] compressed = zdo.GetByteArray(ZDOVars.s_TCData);
-            if (compressed == null) return false;
+            if (zdo == null) return false;
+            return TryRead(zdo.GetByteArray(ZDOVars.s_TCData), pitch, out data);
+        }
+
+        /// <summary>The same, on compressed TCData bytes (as received for an overnight heal).</summary>
+        public static bool TryRead(byte[] compressed, int pitch, out TerrainData data)
+        {
+            data = null;
+            if (compressed == null || pitch < 2) return false;
 
             int width = pitch - 1;
             int count = pitch * pitch;

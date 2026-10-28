@@ -6,11 +6,12 @@ namespace Weathering
 {
     /// <summary>
     /// Plants the sapling of a felled tree at its regrowth site on the server, once the site is
-    /// <c>DelayDays</c> old and nobody is near. The sapling is created as a bare ZDO the way
-    /// <c>ZNetView.Awake</c> would, without an instance, so it appears when a player comes back and
-    /// grows from then on. Uses the heal runner's idle test: a site is only touched while nobody can
-    /// have its zone loaded, except in sleep mode, when sites near players regrow too. Creating a ZDO
-    /// and destroying a claimed one is safe near players: vanilla's server does the same.
+    /// <c>DelayDays</c> old and nobody is near, or while everyone sleeps (sleep mode) also near
+    /// players. The sapling is created as a bare ZDO the way <c>ZNetView.Awake</c> would, without an
+    /// instance; it appears when its zone is next loaded, or at once for players nearby, as any new
+    /// ZDO does. Outside sleep mode a site is only touched while its zone passes the heal runner's
+    /// idle test. Creating a ZDO and destroying a claimed one is safe near players: vanilla's server
+    /// does the same.
     /// </summary>
     internal class RegrowthRunner : MonoBehaviour
     {
@@ -32,6 +33,7 @@ namespace Weathering
         private static int s_scanIndex;
         private static float s_sweepStart = float.NegativeInfinity;
         private static int s_cursor;
+        private static bool s_wasSleeping;
 
         // World time in seconds before which a site blocked by its stump is not checked again.
         private static readonly Dictionary<ZDOID, long> s_blockedUntil = new Dictionary<ZDOID, long>();
@@ -52,8 +54,13 @@ namespace Weathering
             if (zdoMan == null || !ZNetScene.instance) return;
 
             if (zdoMan != s_zdoMan) Reset(zdoMan);
+            // The skip lasts about 12 s, longer than a sweep: start over at the front of the queue
+            // the moment it begins instead of waiting for the next sweep.
+            bool sleeping = HealRunner.IsSleepMode();
+            if (sleeping && !s_wasSleeping) s_cursor = 0;
+            s_wasSleeping = sleeping;
             Sweep(zdoMan);
-            ProcessNext();
+            ProcessNext(sleeping);
         }
 
         /// <summary>Regrowth sites within <paramref name="radius"/> zones (Chebyshev) of a zone.</summary>
@@ -134,11 +141,12 @@ namespace Weathering
             s_seen.Clear();
         }
 
-        private static void ProcessNext()
+        private static void ProcessNext(bool sleeping)
         {
+            // While everyone sleeps, sites near players regrow too, as of the morning the skip ends
+            // at, and the queue is gone round again so sites keep being picked up until it ends.
+            if (sleeping && s_cursor >= s_queue.Count) s_cursor = 0;
             if (s_cursor >= s_queue.Count) return;
-            // While everyone sleeps, sites near players regrow too, as of the morning the skip ends at.
-            bool sleeping = HealRunner.IsSleepMode();
             long nowSeconds = HealRunner.PassTime();
             int now = (int)(nowSeconds / 60);
             float delay = DelayMinutes();
@@ -213,13 +221,16 @@ namespace Weathering
                 return;
             }
 
-            PlantSapling(view, saplingHash, pos, site.GetRotation(), prefab.transform.localScale);
+            PlantSapling(view, saplingHash, pos, site.GetRotation(), prefab.transform.localScale, nowSeconds);
             DestroySite(site);
         }
 
-        // What ZNetView.Awake does for a new object, minus the instance: the server owns the new ZDO
-        // and nobody is near, so the sapling is instantiated when a player comes back.
-        private static void PlantSapling(ZNetView view, int saplingHash, Vector3 pos, Quaternion rotation, Vector3 scale)
+        // What ZNetView.Awake does for a new object, minus the instance: the server owns the new ZDO,
+        // and whoever has the zone loaded (no one outside sleep mode) instantiates it like any new
+        // ZDO; vanilla hands its ownership to a nearby peer. Planted at the pass's now, so in sleep
+        // mode it starts growing at the morning the skip ends at.
+        private static void PlantSapling(ZNetView view, int saplingHash, Vector3 pos, Quaternion rotation, Vector3 scale,
+            long plantedSeconds)
         {
             ZDO zdo = ZDOMan.instance.CreateNewZDO(pos, saplingHash);
             zdo.Persistent = view.m_persistent;
@@ -229,7 +240,8 @@ namespace Weathering
             zdo.SetRotation(rotation);
             if (view.m_syncInitialScale && scale != Vector3.one) zdo.Set(ZDOVars.s_scaleHash, scale);
             // Plant counts growth from this time; left at 0 it would start on first load instead.
-            zdo.Set(ZDOVars.s_plantTime, ZNet.instance.GetTime().Ticks);
+            // Ticks of world time, as ZNet.GetTime gives them.
+            zdo.Set(ZDOVars.s_plantTime, plantedSeconds * TimeSpan.TicksPerSecond);
         }
 
         private static void DestroySite(ZDO site)

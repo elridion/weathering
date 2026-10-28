@@ -27,6 +27,9 @@ namespace Weathering
         // Erosion iterations run per frame while a pass is in flight. A whole 240-iteration catch-up
         // in one frame took tens of milliseconds, a visible stutter for the host.
         private const int ErosionIterationsPerFrame = 24;
+        // Milliseconds of heal passes per frame in sleep mode. Screens are dark, so whole passes run
+        // back to back, but a server frame much longer than this delays the time skip itself.
+        private const double SleepFrameBudgetMs = 8.0;
 
         // Used when the simulation distance cannot be read: the largest the game allows (Near 5, Far 2).
         private const int FallbackNear = 5;
@@ -109,6 +112,12 @@ namespace Weathering
 
         // Results bound for a peer, sent as one message when the pass writes.
         private static readonly List<HealApply.Entry> s_outgoing = new List<HealApply.Entry>();
+        // Data revision each zone had when its result was last sent to a peer. Until the peer's write
+        // syncs back the server's copy is unchanged, and the zone would be healed and sent again on
+        // every round of the queue.
+        private static readonly Dictionary<ZDOID, uint> s_sent = new Dictionary<ZDOID, uint>();
+        private static bool s_wasSleeping;
+        private static readonly System.Diagnostics.Stopwatch s_frameTimer = new System.Diagnostics.Stopwatch();
 
         private class Neighbour
         {
@@ -131,16 +140,27 @@ namespace Weathering
             if (zdoMan == null || !ZNetScene.instance || !EnsureGrid()) return;
 
             if (zdoMan != s_zdoMan) Reset(zdoMan);
+            // The skip lasts about 12 s, longer than a sweep: start over at the front of the queue
+            // the moment it begins instead of waiting for the next sweep.
+            bool sleeping = IsSleepMode();
+            if (sleeping && !s_wasSleeping)
+            {
+                s_cursor = 0;
+                s_sent.Clear();
+            }
+            s_wasSleeping = sleeping;
             Sweep(zdoMan);
-            HealNext();
+            HealNext(sleeping);
         }
 
         /// <summary>
         /// True when no peer and not the server's own player is close enough to have the zone loaded,
         /// even as a ghost zone: its Chebyshev zone distance from every reference position is above
         /// Near + Far + 1 of the largest simulation distance in use. Server only. Anything that writes
-        /// saved data of unloaded zones (healing, tree regrowth) must check this first, except in sleep
-        /// mode, where the heal runner writes only zones the server owns (WriterOf).
+        /// saved data of unloaded zones (healing, tree regrowth) must check this first. Sleep mode is
+        /// the one exception: regrowth then works near players, and the heal runner writes a zone
+        /// itself only when WriterOf names the server; a zone a connected peer owns is applied by
+        /// that peer (HealApply).
         /// </summary>
         internal static bool IsZoneIdle(Vector2s zone) => NearestViewerDistance(zone) > IdleDistance();
 
@@ -303,6 +323,8 @@ namespace Weathering
                 if (stamps != null) StampStore.Save(zdo, stamps);
                 if (last != 0L) StampStore.SetLast(zdo, last);
                 StampStore.SetPending(zdo, pending);
+                // In sleep mode the zone may be loaded here (the host's own); see HealApply.ReloadLoaded.
+                HealApply.ReloadLoaded(zdo);
                 return;
             }
             s_outgoing.Add(new HealApply.Entry
@@ -323,6 +345,8 @@ namespace Weathering
             try
             {
                 HealApply.Send(writer, s_outgoing);
+                foreach (HealApply.Entry entry in s_outgoing)
+                    s_sent[entry.Id] = entry.Revision;
             }
             finally
             {
@@ -341,6 +365,8 @@ namespace Weathering
             s_sweepStart = float.NegativeInfinity;
             s_cursor = 0;
             s_nextHealTime = 0f;
+            s_sent.Clear();
+            s_wasSleeping = false;
             ClearPass();
         }
 
@@ -380,19 +406,22 @@ namespace Weathering
             return $"Healing zone {s_passZone.x},{s_passZone.y} now: {phase}.";
         }
 
-        private static void HealNext()
+        private static void HealNext(bool sleeping)
         {
             if (s_passActive)
             {
                 ContinuePass();
                 return;
             }
-            if (s_cursor >= s_queue.Count) return;
-            // Screens are dark while everyone sleeps: no wait between passes.
-            bool sleeping = IsSleepMode();
+            // Screens are dark while everyone sleeps: no wait between passes, and the queue is gone
+            // round again and again, so zones keep being picked up until the skip ends.
             if (!sleeping && Time.realtimeSinceStartup < s_nextHealTime) return;
+            if (sleeping && s_cursor >= s_queue.Count) s_cursor = 0;
+            if (s_cursor >= s_queue.Count) return;
             long now = PassTime();
             long day = DayLength();
+            s_frameTimer.Reset();
+            s_frameTimer.Start();
 
             for (int n = 0; n < InspectPerFrame && s_cursor < s_queue.Count; n++)
             {
@@ -403,6 +432,7 @@ namespace Weathering
                 if (last != 0L && now >= last && now - last < day) continue;
                 Vector2s zone = ZoneSystem.GetZone(zdo.GetPosition());
                 if (!sleeping && !IsZoneIdle(zone, zdo)) continue;
+                if (sleeping && s_sent.TryGetValue(zdo.m_uid, out uint sent) && sent == zdo.DataRevision) continue;
                 long writer = WriterOf(zone, zdo);
 
                 try
@@ -417,7 +447,8 @@ namespace Weathering
                 if (!s_passActive) EndPass();
                 // In sleep mode the whole pass runs in this frame.
                 else if (sleeping) ContinuePass();
-                return;
+                // Sleep mode starts further passes in this frame while the budget lasts.
+                if (!sleeping || s_passActive || s_frameTimer.Elapsed.TotalMilliseconds >= SleepFrameBudgetMs) return;
             }
         }
 

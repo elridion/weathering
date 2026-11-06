@@ -1,5 +1,9 @@
 ﻿# Changelog
 
+## 0.2.1
+
+- No changes in game; this release only updates the mod page.
+
 ## 0.2.0
 
 - Overnight healing: while everyone sleeps, spots past their delay near the sleeping players heal

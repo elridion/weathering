@@ -1,103 +1,59 @@
 # Weathering
 
-Let the land heal itself.
+The land outside your bases heals over time. Dug pits slump, grass grows back over dirt and fields, and felled trees return as saplings.
 
-In vanilla Valheim every terrain edit is permanent: a pit dug for copper, a patch of hoed dirt or an
-abandoned field stays exactly as you left it, forever. Weathering lets the ground outside your bases
-recover on its own, the way you would expect nature to.
+## Features
 
-> **Warning:** existing earthworks outside bases will weather too, starting 3 in-game days (the
-> default) after you install the mod. Removing the mod does not bring them back.
-
-## What heals
-
-- **Dirt and cultivated ground** turn back into natural ground: grass grows back in from the edges,
-  2 m per in-game day (the default), with a soft, ragged front. A patch grass cannot reach, such as
-  a strip shut in between a paved road and a base, fades on its own 10 in-game days after its
-  delay ran out.
-- **Dug holes and raised mounds** slump over time: a steep pit widens into a shallow, soft-edged
-  ditch, a raised wall into a mound. The earth is moved, not removed, and the ground never returns
-  to its original shape.
-- Every spot has its own timer. Nothing changes until it was last edited 3 in-game days ago (the
-  default), and digging next to an old pit does not freeze the old pit. Sleeping counts as time
-  passing.
-- **Felled trees** regrow: 3 in-game days (the default) after a tree was felled, its sapling appears
-  where it stood and grows into its tree like one you planted, but it always grows: the spot is
-  never too crowded, too shaded or too cold, since its tree already stood there. A stump left standing keeps its tree from
-  regrowing until the stump is removed. Trees with no sapling (such as autumn birches) do not
-  regrow, and rocks and ore never come back.
-- Healing happens on the server (or the host) while no player is nearby, so you never watch the
-  ground move or a sapling pop up: you find it weathered when you come back. "Nearby" is counted in
-  zones (64 m squares): a zone heals only while every player is more than the game's simulation
-  distance plus one zone away in every direction. With the default simulation distance that means
-  at least 6 zones (about 400 m) away, up to 9 zones (about 600 m) at the highest setting.
-- **Overnight:** while everyone sleeps, spots near the sleeping players that are past their delay
-  heal too, and felled trees there regrow, as of the coming morning; you wake up to the change. Your
-  base and everything else that never heals stays protected. A zone still heals at most once per
-  in-game day, catching up only the time since it last healed, so a single night does not wash an
-  area out.
-
-## Console commands
-
-On the server or host (in single player, your own game). Handy for testing:
-
-- `weathering_age <days>` (needs `devcommands`): makes terrain edits and felled trees within 3
-  zones of you that many in-game days older. Walk away to let them heal and regrow; the command
-  says how many zones away everyone must be.
-- `weathering_status`: how many zones wait to heal and felled trees wait to regrow, and whether
-  the zone you stand in is waiting, when it last healed and whether it can heal right now (with
-  how many zones away the nearest player is and how many it needs), and whether everyone is asleep
-  so that zones near players heal overnight.
-- `weathering_clear_sites`: removes every spot where a felled tree waits to regrow. Run it before
-  removing the mod (see below).
-
-## Removing the mod
-
-First run `weathering_clear_sites` on the server or host. Felled trees remember their spot with an
-invisible marker; without the mod, players on a dedicated server get a "Missing prefab hash" log
-line for every marker near them, every frame. Healed terrain stays as it is and its data stays
-valid for vanilla Valheim, but nothing heals any more. A sapling the mod planted that is still
-growing becomes an ordinary sapling: where the game finds it too crowded, shaded or cold, it stays
-unhealthy and does not grow.
+- Dirt and cultivated ground turn back into grass, which spreads in from the edges with a soft,
+  ragged front.
+- Dug holes and raised mounds slowly slump into shallow, soft-edged ditches and mounds. The earth
+  is moved, not removed, so the ground never returns to its original shape.
+- Felled trees regrow: their sapling appears where they stood and always grows. A stump left
+  standing holds the tree back until you remove it. Rocks and ore never come back.
+- Each spot starts to heal 3 in-game days (the default) after it was last touched. Sleeping
+  counts as time passing.
+- Healing happens while no player is nearby (about 400 m away at the default simulation distance), so you never watch the
+  ground move. While everyone sleeps, spots near the sleepers heal too, and you wake up to the
+  change.
 
 ## What never heals
 
-These areas neither heal nor regrow trees:
+- Player bases: the area of any workbench, campfire, hearth or other station, plus a margin, and
+  around Warden stones (even switched-off ones).
+- Paved roads, and the ground around every player-built piece, so a lone portal or bridge is not
+  left floating or buried.
+- Terrain shaped by the world itself (locations, dungeons), and ground the cultivator turned back
+  to grass.
 
-- **Player bases:** anything inside the area of a workbench, campfire, hearth or other station,
-  plus a margin, and around Warden stones (even switched-off ones).
-- **Paved roads:** paved ground keeps its surface and height.
-- **Ground near your buildings:** a margin around every player-built piece, so an outpost portal or
-  a lone bridge does not end up floating or buried.
-- Ground near fires and stations the world generated with a player-base area (some location
-  campfires, for example) never heals either.
-- Terrain shaped by the world itself (locations, dungeons) and deep snow.
-- Ground the cultivator turned back to grass keeps the look you gave it.
+## Installation
 
-Removing a workbench or another piece does not free its ground right away: that ground starts to
-heal only after something in the same zone (64 m square) is dug, raised or painted again.
+- Needs BepInEx and [Jotunn](https://thunderstore.io/c/valheim/p/ValheimModding/Jotunn/).
+- Healing runs on the server (or the host). The server and every player need the mod, at the same
+  minor version.
+- Existing earthworks outside bases weather too, starting 3 in-game days after you install the
+  mod.
+- Before uninstalling, run `weathering_clear_sites` on the server or host: it removes the
+  invisible markers that felled trees leave while they wait to regrow, which would otherwise
+  spam "Missing prefab hash" log lines. Healed terrain stays as it is and is valid for vanilla
+  Valheim. A sapling the mod planted becomes an ordinary sapling.
+- Console commands on the server or host: `weathering_status` shows what is waiting to heal, and
+  `weathering_age <days>` (needs `devcommands`) ages nearby edits and felled trees for testing.
 
 ## Configuration
 
-`BepInEx/config/elridion.weathering.cfg`. Everything is under `General`, server-synced and admin-only.
+Settings are in `BepInEx/config/elridion.weathering.cfg`, under `General`. They are synced from
+the server and only admins can change them.
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `DelayDays` | 3 | In-game days after a spot was last edited before it starts to heal, and after a tree was felled before its sapling appears (0.1-30) |
-| `GrassSpreadMeters` | 2 | Meters per in-game day that grass grows back into dirt and cultivated ground from its edges once healing starts (0.25-16) |
-| `ErosionRate` | 1 | Relative strength of height erosion: 1 is the default look, 0 turns height erosion off, 2 is twice as fast (0-5) |
-| `BaseMargin` | 10 | Extra protected distance in meters around every player base area (0-50) |
-| `PieceMargin` | 4 | Protected distance in meters around any player-built piece (0-20) |
-| `ExtraBasePieces` | (empty) | Extra prefabs that count as a base, as a comma-separated list of `prefab:radius` in meters, for example `piece_example:30` (radius above 0, up to 500). Use it for modded pieces that vanilla does not treat as a base |
-
-## Requirements
-
-- BepInEx for Valheim
-- [Jotunn](https://thunderstore.io/c/valheim/p/ValheimModding/Jotunn/)
-
-Every client and the server need the mod installed, at the same minor version.
+| `DelayDays` | 3 | In-game days before an edited spot starts to heal and a felled tree's sapling appears (0.1-30). |
+| `GrassSpreadMeters` | 2 | Meters per in-game day that grass spreads back into dirt and cultivated ground (0.25-16). |
+| `ErosionRate` | 1 | Strength of height erosion: 0 turns it off, 2 is twice as fast (0-5). |
+| `BaseMargin` | 10 | Extra protected meters around every player base area (0-50). |
+| `PieceMargin` | 4 | Protected meters around any player-built piece (0-20). |
+| `ExtraBasePieces` | (empty) | Modded pieces that count as a base, as `prefab:radius` in meters, comma-separated, for example `piece_example:30` (radius up to 500). |
 
 ## Credits
 
-- Mod icon: "Hills" by Delapouite from [game-icons.net](https://game-icons.net), licensed under
+- The icon is "Hills" by Delapouite from [game-icons.net](https://game-icons.net), licensed under
   [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). Recoloured and outlined.

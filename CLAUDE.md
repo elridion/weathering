@@ -41,7 +41,10 @@ Stack, build, verification and git workflow are shared by all mods: see `../CLAU
   `spawnward_radius` (float) and prefab `piece_spawnward`; those belong to Warden.
 - **Removing the mod must leave a valid world.** Only ever write vanilla-valid `TerrainComp` data.
 - **Docs follow code.** `package/README.md` keeps the config table in sync with
-  `WeatheringPlugin.Awake`, and its lists of what heals and what never does with the heal rules.
+  `WeatheringPlugin.Awake`, and its features and "What never heals" list with the heal rules. It
+  stays short (the user's call): its first line matches `<PackageDescription>`, then short
+  features, install notes and the settings. How healing works in detail belongs in this file and
+  `docs/`, not the store page.
 
 ## Art and licensing
 
